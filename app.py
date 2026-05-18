@@ -549,12 +549,8 @@ with st.sidebar:
     if st.button("📂 이전기록 불러오기", use_container_width=True, type="primary"):
         _h = load_history()
         _mon_str = monday.isoformat()
-        _week_dates = {(monday + timedelta(days=_d)).isoformat() for _d in range(7)}
-        # 해당 주 기존 기록 제거 후 저장된 기록으로 교체
-        st.session_state.records = [
-            r for r in st.session_state.records
-            if r.get("_date","") not in _week_dates
-        ]
+        # 세션 전체 초기화 후 선택 주차의 저장 기록만 로드
+        st.session_state.records = []
         for _r in _h.get("records", []):
             _rm = _r.get("_monday","")
             if not _rm and _r.get("_date"):
