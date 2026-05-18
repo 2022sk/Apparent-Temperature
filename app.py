@@ -457,10 +457,6 @@ if "file_history" not in st.session_state:
 meta   = st.session_state.meta
 fh     = st.session_state.file_history
 
-if "past_active_recs" not in st.session_state:
-    st.session_state.past_active_recs = []
-if "past_sel_key" not in st.session_state:
-    st.session_state.past_sel_key = None
 
 # ── 사이드바 ───────────────────────────────────────────────────────────────
 with st.sidebar:
@@ -671,8 +667,7 @@ with b2:
 with b3:
     if st.button("💾  최종 저장", use_container_width=True,
                  disabled=not any(r.get("_done") for r in st.session_state.records)):
-        from collections import defaultdict as _ddict
-        _wk_groups = _ddict(list)
+        _wk_groups = defaultdict(list)
         for _r in st.session_state.records:
             _wm = _r.get("_monday","")
             if not _wm and _r.get("_date"):
