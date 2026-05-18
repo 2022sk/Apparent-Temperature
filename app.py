@@ -91,7 +91,7 @@ def auto_action(hi) -> str:
     return "N/A" if (hi is None or hi < 31) else "추가휴식시간부여"
 
 def parse_date(filename: str) -> str:
-    # YYYYMMDD (앞뒤로 다른 숫자가 없어야 함, 20xx년도만)
+    # YYYYMMDD (20xx년도, 앞뒤 숫자 없어야 함)
     m = re.search(r'(?<!\d)(20\d{2})(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])(?!\d)', filename)
     if m:
         return f"{m.group(1)}-{m.group(2)}-{m.group(3)}"
@@ -99,6 +99,10 @@ def parse_date(filename: str) -> str:
     m = re.search(r'(20\d{2})[-./](0[1-9]|1[0-2])[-./](0[1-9]|[12]\d|3[01])', filename)
     if m:
         return f"{m.group(1)}-{m.group(2)}-{m.group(3)}"
+    # YYMMDD (6자리, 20xx 세기로 해석)
+    m = re.search(r'(?<!\d)(\d{2})(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])(?!\d)', filename)
+    if m:
+        return f"20{m.group(1)}-{m.group(2)}-{m.group(3)}"
     return ""
 
 def resize_image(raw: bytes, max_px: int = 1568) -> bytes:
