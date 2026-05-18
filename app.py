@@ -555,17 +555,18 @@ with tab1:
             d_str  = parse_date(f.name)
             slot   = slot_from_filename(f.name)
             d_obj  = date.fromisoformat(d_str) if d_str else monday
-            rec_monday = (d_obj - timedelta(days=d_obj.weekday())) if d_str else monday
-            sk = (d_str, slot)
+            rec_monday = d_obj - timedelta(days=d_obj.weekday())
+            d_key  = d_obj.isoformat()
+            sk = (d_key, slot)
             if sk in existing_slots:
                 idx = existing_slots[sk]
                 st.session_state.records[idx].update({"_bytes": rbytes, "_filename": f.name, "_done": False})
             else:
                 st.session_state.records.append({
                     "_filename": f.name, "_bytes": rbytes,
-                    "_date": d_str, "_slot": slot, "_done": False,
+                    "_date": d_key, "_slot": slot, "_done": False,
                     "_monday": rec_monday.isoformat(),
-                    "날짜": f"{d_obj.month}/{d_obj.day}({DAYS_KO[d_obj.weekday()]})" if d_str else "",
+                    "날짜": f"{d_obj.month}/{d_obj.day}({DAYS_KO[d_obj.weekday()]})",
                     "구분": slot, "측정시각": "", "온도(°C)": None,
                     "습도(%)": None, "체감온도(°C)": None, "단계": "",
                     "조치사항": "N/A", "기타내용": "",
