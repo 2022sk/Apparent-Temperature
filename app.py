@@ -654,7 +654,7 @@ if uploaded:
         st.toast(f"{added}개 사진 추가 (리사이즈 완료)", icon="📸")
 
 # ── 버튼 행 ──────────────────────────────────────────────────────────────
-b1, b2, b3, b4, _ = st.columns([1.3, 1, 1, 1, 0.8])
+b1, b2, b3, _ = st.columns([1.3, 1, 1, 3])
 with b1:
     do_extract = st.button("🤖  AI 자동 추출", type="primary",
                             disabled=(not api_key or not st.session_state.records),
@@ -665,30 +665,6 @@ with b2:
         for r in st.session_state.records: r["_done"] = False
         st.rerun()
 with b3:
-    if st.button("💾  최종 저장", use_container_width=True,
-                 disabled=not any(r.get("_done") for r in st.session_state.records)):
-        _wk_groups = defaultdict(list)
-        for _r in st.session_state.records:
-            _wm = _r.get("_monday","")
-            if not _wm and _r.get("_date"):
-                try:
-                    _d3 = date.fromisoformat(_r["_date"])
-                    _wm = (_d3 - timedelta(days=_d3.weekday())).isoformat()
-                except Exception:
-                    _wm = monday.isoformat()
-            _wk_groups[_wm].append(_r)
-        _saved = 0
-        for _wm, _recs in _wk_groups.items():
-            if any(_r.get("_done") for _r in _recs):
-                try: _wmon = date.fromisoformat(_wm)
-                except Exception: _wmon = monday
-                save_history(meta, _recs, _wmon)
-                _saved += 1
-        _h2 = load_history()
-        st.session_state.file_history["past_records"] = _h2.get("records", [])
-        st.session_state.file_history["현장코드_map"] = _h2.get("현장코드_map", {})
-        st.toast(f"✅ {_saved}개 주차 저장 완료!", icon="💾")
-with b4:
     if st.button("🗑  전체 초기화", use_container_width=True):
         st.session_state.records = []; st.rerun()
 
@@ -880,17 +856,43 @@ for wk_monday in all_mondays:
         },
     )
 
-    # 체크된 행 삭제
+    # 체크된 행 삭제 + 최종 저장
     del_indices = [i for i in range(len(grid_keys)) if edited.iloc[i]["삭제"]]
-    if del_indices:
-        del_keys = {grid_keys[i] for i in del_indices}
-        if st.button(f"🗑 선택한 {len(del_indices)}행 초기화",
-                     key=f"del_{wk_monday.isoformat()}", type="secondary"):
-            st.session_state.records = [
-                r for r in st.session_state.records
-                if (r.get("_date",""), r.get("_slot","")) not in del_keys
-            ]
-            st.rerun()
+    _ac1, _ac2, _ = st.columns([1.4, 1.2, 3])
+    with _ac1:
+        if del_indices:
+            del_keys = {grid_keys[i] for i in del_indices}
+            if st.button(f"🗑 선택 {len(del_indices)}행 초기화",
+                         key=f"del_{wk_monday.isoformat()}", type="secondary",
+                         use_container_width=True):
+                st.session_state.records = [
+                    r for r in st.session_state.records
+                    if (r.get("_date",""), r.get("_slot","")) not in del_keys
+                ]
+                st.rerun()
+    with _ac2:
+        _has_done = any(r.get("_done") for r in st.session_state.records)
+        if st.button("✅ 최종 저장", key=f"save_{wk_monday.isoformat()}",
+                     disabled=not _has_done, use_container_width=True):
+            _wk_grps = defaultdict(list)
+            for _r in st.session_state.records:
+                _wm = _r.get("_monday","")
+                if not _wm and _r.get("_date"):
+                    try:
+                        _d3 = date.fromisoformat(_r["_date"])
+                        _wm = (_d3 - timedelta(days=_d3.weekday())).isoformat()
+                    except Exception:
+                        _wm = monday.isoformat()
+                _wk_grps[_wm].append(_r)
+            for _wm, _recs in _wk_grps.items():
+                if any(_r.get("_done") for _r in _recs):
+                    try: _wmon = date.fromisoformat(_wm)
+                    except Exception: _wmon = monday
+                    save_history(meta, _recs, _wmon)
+            _h2 = load_history()
+            st.session_state.file_history["past_records"] = _h2.get("records", [])
+            st.session_state.file_history["현장코드_map"] = _h2.get("현장코드_map", {})
+            st.toast("✅ 저장 완료!", icon="✅")
 
     for row_i, key in enumerate(grid_keys):
         row = {k: _nan_to_none(v) for k, v in edited.iloc[row_i].to_dict().items()}
