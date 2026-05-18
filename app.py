@@ -11,7 +11,7 @@ from openpyxl.utils import get_column_letter
 from openpyxl.drawing.image import Image as XLImage
 from PIL import Image, ImageOps
 import pandas as pd
-import io, re, json, math, os, calendar, time
+import io, re, json, math, os, calendar, time, base64
 import plotly.graph_objects as go
 from datetime import datetime, date, timedelta
 from collections import defaultdict
@@ -154,7 +154,9 @@ def save_history(meta: dict, records: list, monday: date = None):
     for rec in records:
         if not rec.get("_done"):
             continue
-        slim = {k: v for k, v in rec.items() if k != "_bytes"}
+        slim = {k: v for k, v in rec.items() if k not in ("_bytes", "_bytes_b64")}
+        if rec.get("_bytes"):
+            slim["_bytes_b64"] = base64.b64encode(rec["_bytes"]).decode("ascii")
         slim["_위치"]   = meta.get("위치", "")
         slim["_현장명"] = meta.get("현장명", "")
         slim["_업체명"] = meta.get("업체명", "")
@@ -175,29 +177,39 @@ def save_history(meta: dict, records: list, monday: date = None):
 
 # ── Excel 생성 ────────────────────────────────────────────────────────────
 def build_excel(records: list, meta: dict, monday: date) -> bytes:
+    from openpyxl.worksheet.page import PageMargins
     wb = openpyxl.Workbook(); ws = wb.active; ws.title = "체감온도 기록관리 대장"
-    thin  = Side(style="thin",   color="BBBBBB")
-    bdr   = Border(left=thin, right=thin, top=thin, bottom=thin)
-    ctr   = Alignment(horizontal="center", vertical="center", wrap_text=False)
-    hfill = PatternFill("solid", fgColor="1C3A5E")
-    hfont = Font(bold=True, color="FFFFFF", name="맑은 고딕", size=9)
-    dfont = Font(name="맑은 고딕", size=9)
-    mfill = PatternFill("solid", fgColor="DCE9F5")
-    nfill = PatternFill("solid", fgColor="EAF2FB")
-    nfont = Font(bold=True, name="맑은 고딕", size=9)
 
-    ROW_H  = 30    # 전체 행 높이 (pt)
-    NCOL   = 11    # 데이터 열 수 (A~K)
-    PC     = NCOL + 1          # 사진 시작 열 (L=12)
-    PCW    = 18                # 사진 열 너비 (chars)
-    PPH    = int(ROW_H * 4 * 4 / 3)       # pt→px: ×(4/3), 4행 → 160px
-    PPW    = int(PCW * 7 + 5)             # chars→px: ×7+5 → 131px
+    # ── 스타일 ──────────────────────────────────────────────────────────────
+    thin = Side(style="thin", color="B8CCE0")
+    bdr  = Border(left=thin, right=thin, top=thin, bottom=thin)
+    ctr  = Alignment(horizontal="center", vertical="center", wrap_text=False)
+
+    title_fill = PatternFill("solid", fgColor="1E3A5F")
+    title_font = Font(bold=True, color="FFFFFF", name="맑은 고딕", size=13)
+    hfill = PatternFill("solid", fgColor="2D6A9F")
+    hfont = Font(bold=True, color="FFFFFF", name="맑은 고딕", size=9)
+    pfill = PatternFill("solid", fgColor="1E6091")
+    pfont = Font(bold=True, color="FFFFFF", name="맑은 고딕", size=9)
+    mfill = PatternFill("solid", fgColor="EBF3FA")
+    mfont = Font(bold=True, name="맑은 고딕", size=9, color="1E3A5F")
+    dfont = Font(name="맑은 고딕", size=9, color="1C2B3A")
+    date_font = Font(bold=True, name="맑은 고딕", size=9, color="1E3A5F")
+    dfill0 = PatternFill("solid", fgColor="FFFFFF")
+    dfill1 = PatternFill("solid", fgColor="F0F7FB")
+    lv_colors = {"위험":("FF3B30","FFFFFF"), "경고":("FF9500","FFFFFF"),
+                 "주의":("FFD60A","1C2B3A"), "관심":("30D158","FFFFFF")}
+
+    ROW_H = 28
+    NCOL  = 11
+    PC    = NCOL + 1
+    PCW   = 21
+    PPH   = int(ROW_H * 4 * 4 / 3) - 4    # ≈145px
+    PPW   = int(PCW * 7) - 4               # ≈143px
 
     HDR     = ["작성일","구분","측정시각","온도(°C)","습도(%)","체감온도(°C)",
                "단계","조치사항","기타내용","측정자","비고"]
-    CWIDTHS = [10, 7, 9, 7, 7, 9, 7, 14, 12, 9, 14]
-    lv_colors = {"위험":("FF3B30","FFFFFF"), "경고":("FF9500","FFFFFF"),
-                 "주의":("FFCC00","000000"), "관심":("34C759","FFFFFF")}
+    CWIDTHS = [10, 7, 9, 7.5, 7.5, 9.5, 7, 14, 12, 9, 14]
 
     for i, w in enumerate(CWIDTHS, 1):
         ws.column_dimensions[get_column_letter(i)].width = w
@@ -213,31 +225,33 @@ def build_excel(records: list, meta: dict, monday: date) -> bytes:
     # ── 행 1 : 제목 ───────────────────────────────────────────────────────
     ws.merge_cells(f"A1:{get_column_letter(NCOL)}1")
     c = ws["A1"]; c.value = "체감온도 기록관리 대장"
-    c.font = Font(bold=True, size=13, name="맑은 고딕", color="FFFFFF")
-    c.alignment = ctr; c.fill = hfill
-    # 사진대지 제목: 행1~2 병합 (슬롯 레이블 중복 방지)
+    c.font = title_font; c.alignment = ctr; c.fill = title_fill; c.border = bdr
     ws.merge_cells(f"{get_column_letter(PC)}1:{get_column_letter(PC+3)}2")
     ph = ws[f"{get_column_letter(PC)}1"]
-    ph.value = "사진대지"; ph.fill = hfill; ph.font = hfont; ph.alignment = ctr
+    ph.value = "사진대지"; ph.fill = pfill; ph.font = pfont; ph.alignment = ctr; ph.border = bdr
+    ws.row_dimensions[1].height = 22
 
     # ── 행 2 : 메타 정보 ──────────────────────────────────────────────────
     ws.merge_cells("A2:C2"); ws.merge_cells("D2:F2")
     ws.merge_cells("G2:I2"); ws.merge_cells("J2:K2")
+    meta_align = Alignment(horizontal="left", vertical="center",
+                           wrap_text=False, shrink_to_fit=True)
     for addr, val in [("A2", f"현장명: {meta.get('현장명','')}"),
                       ("D2", f"업체명: {meta.get('업체명','')}"),
                       ("G2", f"측정위치: {meta.get('위치','')}"),
                       ("J2", wk_lbl)]:
         c = ws[addr]; c.value = val
-        c.font = Font(bold=True, name="맑은 고딕", size=9)
-        c.alignment = ctr; c.border = bdr; c.fill = mfill
+        c.font = mfont; c.alignment = meta_align; c.border = bdr; c.fill = mfill
+    ws.row_dimensions[2].height = 18
 
-    # ── 행 3 : 컬럼 헤더 + 사진 슬롯 레이블 ────────────────────────────────
+    # ── 행 3 : 컬럼 헤더 ──────────────────────────────────────────────────
     for ci, h in enumerate(HDR, 1):
         c = ws.cell(row=3, column=ci, value=h)
         c.fill = hfill; c.font = hfont; c.alignment = ctr; c.border = bdr
     for i, lbl in enumerate(SLOTS):
         c = ws.cell(row=3, column=PC+i, value=lbl)
-        c.fill = nfill; c.font = nfont; c.alignment = ctr; c.border = bdr
+        c.fill = pfill; c.font = pfont; c.alignment = ctr; c.border = bdr
+    ws.row_dimensions[3].height = 16
 
     # ── 행 4~ : 7일 × 4슬롯 데이터 ──────────────────────────────────────
     rec_map: dict[tuple, dict] = {}
@@ -246,9 +260,10 @@ def build_excel(records: list, meta: dict, monday: date) -> bytes:
 
     row_num = 4
     for day_i in range(7):
-        d   = monday + timedelta(days=day_i)
-        rs  = row_num          # 이 날의 첫 행
-        re_ = row_num + 3      # 이 날의 마지막 행
+        d    = monday + timedelta(days=day_i)
+        rs   = row_num
+        re_  = row_num + 3
+        dfill = dfill0 if day_i % 2 == 0 else dfill1
 
         for slot in SLOTS:
             rec = rec_map.get((d.isoformat(), slot), {})
@@ -270,7 +285,7 @@ def build_excel(records: list, meta: dict, monday: date) -> bytes:
             ]
             for ci, val in enumerate(row_data, 1):
                 c = ws.cell(row=row_num, column=ci, value=val)
-                c.font = dfont; c.alignment = ctr; c.border = bdr
+                c.font = dfont; c.alignment = ctr; c.border = bdr; c.fill = dfill
                 if ci in (4,5,6) and val != "":
                     c.number_format = "0.0"
             if lv in lv_colors:
@@ -280,43 +295,40 @@ def build_excel(records: list, meta: dict, monday: date) -> bytes:
                 lc.font = Font(color=fg, bold=True, name="맑은 고딕", size=9)
             row_num += 1
 
-        # 작성일 병합 (A열, 4행)
+        # 작성일 병합
         ws.merge_cells(start_row=rs, start_column=1, end_row=re_, end_column=1)
-        ws.cell(row=rs, column=1).font = Font(bold=True, name="맑은 고딕", size=10)
-        ws.cell(row=rs, column=1).alignment = ctr
+        dc = ws.cell(row=rs, column=1)
+        dc.font = date_font; dc.alignment = ctr; dc.fill = dfill; dc.border = bdr
 
-        # ── 사진대지: 슬롯별 4행 병합 후 사진 삽입 ──────────────────────
+        # 사진대지: 슬롯별 4행 병합 후 사진 삽입
         for si, slot in enumerate(SLOTS):
-            col = PC + si
+            col   = PC + si
             col_l = get_column_letter(col)
-            # 4행 병합
-            ws.merge_cells(start_row=rs, start_column=col,
-                           end_row=re_,  end_column=col)
+            ws.merge_cells(start_row=rs, start_column=col, end_row=re_, end_column=col)
             tc = ws.cell(row=rs, column=col)
-            tc.border = bdr; tc.alignment = ctr
+            tc.border = bdr; tc.alignment = ctr; tc.fill = dfill
 
             rec = rec_map.get((d.isoformat(), slot))
             if rec and rec.get("_bytes"):
                 try:
                     pil = Image.open(io.BytesIO(rec["_bytes"])).convert("RGB")
-                    pil = pil.resize((PPW, PPH), Image.LANCZOS)  # 셀에 딱 맞게 리사이즈
-                    buf = io.BytesIO()
-                    pil.save(buf, format="PNG"); buf.seek(0)
+                    pil = pil.resize((PPW, PPH), Image.LANCZOS)
+                    buf = io.BytesIO(); pil.save(buf, format="PNG"); buf.seek(0)
                     xi = XLImage(buf); xi.width = PPW; xi.height = PPH
                     ws.add_image(xi, f"{col_l}{rs}")
                 except Exception:
-                    tc.value = "오류"
+                    tc.value = "⚠"
 
-    # ── 전체 행 높이 30으로 통일 ──────────────────────────────────────────
-    for r in range(1, row_num):
+    # 행 높이 통일
+    for r in range(4, row_num):
         ws.row_dimensions[r].height = ROW_H
 
-    # ── KOSHA 범례 행 ──────────────────────────────────────────────────────
+    # ── KOSHA 범례 ────────────────────────────────────────────────────────
     leg = row_num
     for lbl, c1, c2, bg, fg in [
-        ("KOSHA 폭염 단계", 1, 2, "1C3A5E", "FFFFFF"),
-        ("■ 관심  31°C~",   3, 4, "34C759", "FFFFFF"),
-        ("■ 주의  33°C~",   5, 6, "FFCC00", "000000"),
+        ("KOSHA 폭염 단계", 1, 2, "1E3A5F", "FFFFFF"),
+        ("■ 관심  31°C~",   3, 4, "30D158", "FFFFFF"),
+        ("■ 주의  33°C~",   5, 6, "FFD60A", "1C2B3A"),
         ("■ 경고  35°C~",   7, 8, "FF9500", "FFFFFF"),
         ("■ 위험  38°C~",   9, 11, "FF3B30", "FFFFFF"),
     ]:
@@ -325,7 +337,7 @@ def build_excel(records: list, meta: dict, monday: date) -> bytes:
         c.fill = PatternFill("solid", fgColor=bg)
         c.font = Font(color=fg, bold=True, name="맑은 고딕", size=8)
         c.alignment = ctr; c.border = bdr
-    ws.row_dimensions[leg].height = 18
+    ws.row_dimensions[leg].height = 14
     row_num += 1
 
     # ── 서명란 ──────────────────────────────────────────────────────────────
@@ -335,22 +347,20 @@ def build_excel(records: list, meta: dict, monday: date) -> bytes:
         c = ws.cell(row=sig, column=c1, value=f"{label}:                              (인)")
         c.border = bdr
         c.alignment = Alignment(horizontal="left", vertical="top", wrap_text=False)
-        c.font = Font(name="맑은 고딕", size=9)
+        c.font = Font(name="맑은 고딕", size=9, color="1C2B3A")
     ws.row_dimensions[sig].height = ROW_H * 2
     row_num += 1
 
-    # ── 인쇄 설정 (A4 가로, 1페이지 너비 맞춤) ──────────────────────────────
-    from openpyxl.worksheet.page import PageMargins
+    # ── 인쇄 설정 ────────────────────────────────────────────────────────
     ws.print_area = f"A1:{get_column_letter(PC+3)}{row_num-1}"
     ws.page_setup.orientation = "landscape"
     ws.page_setup.paperSize = 9
     ws.page_setup.fitToPage = True
     ws.page_setup.fitToWidth = 1
     ws.page_setup.fitToHeight = 0
-    ws.page_margins = PageMargins(left=0.5, right=0.5, top=0.75, bottom=0.75,
-                                  header=0.3, footer=0.3)
+    ws.page_margins = PageMargins(left=0.4, right=0.4, top=0.6, bottom=0.6,
+                                  header=0.2, footer=0.2)
     ws.print_title_rows = "1:3"
-
     ws.freeze_panes = "A4"
     out = io.BytesIO(); wb.save(out); return out.getvalue()
 
@@ -911,7 +921,11 @@ with tab2:
                                 ((date.fromisoformat(r["_date"]) -
                                   timedelta(days=date.fromisoformat(r["_date"]).weekday())).isoformat()
                                  if r.get("_date") else "")) == sel_ms]
-                    st.session_state.past_active_recs = [dict(r, _bytes=None) for r in base]
+                    st.session_state.past_active_recs = [
+                        dict(r, _bytes=(base64.b64decode(r["_bytes_b64"])
+                                        if r.get("_bytes_b64") else None))
+                        for r in base
+                    ]
 
                 p_recs = st.session_state.past_active_recs
 
