@@ -182,24 +182,48 @@ def save_history(meta: dict, records: list, monday: date = None):
     with open(HISTORY_FILE, "w", encoding="utf-8") as f:
         json.dump(h, f, ensure_ascii=False, default=str)
 
+# ── Excel 폰트 감지 ──────────────────────────────────────────────────────
+def _get_excel_font() -> str:
+    """현대하모니(HyundaiSans) 폰트 설치 여부 확인 → 없으면 맑은 고딕"""
+    import glob as _g
+    dirs = (
+        [r"C:\Windows\Fonts"] if os.name == "nt"
+        else ["/usr/share/fonts", "/usr/local/share/fonts",
+              os.path.expanduser("~/.local/share/fonts")]
+    )
+    patterns = ["*[Hh]yundai*[Ss]ans*", "*[Hh]yundai*[Hh]armony*", "*현대하모니*"]
+    for d in dirs:
+        if not os.path.isdir(d):
+            continue
+        for p in patterns:
+            hits = _g.glob(os.path.join(d, "**", p), recursive=True) or _g.glob(os.path.join(d, p))
+            if hits:
+                n = os.path.splitext(os.path.basename(hits[0]))[0]
+                if "Head" in n: return "HyundaiSansHead"
+                if "Text" in n: return "HyundaiSansText"
+                return "현대하모니"
+    return "맑은 고딕"
+
 # ── Excel 생성 ────────────────────────────────────────────────────────────
 def build_excel(records: list, meta: dict, monday: date) -> bytes:
     from openpyxl.worksheet.page import PageMargins
     from openpyxl.worksheet.datavalidation import DataValidation
     from openpyxl.formatting.rule import CellIsRule
+    from openpyxl.drawing.spreadsheet_drawing import TwoCellAnchor, AnchorMarker
     wb = openpyxl.Workbook(); ws = wb.active; ws.title = "체감온도 기록관리 대장"
 
-    # ── Apple-inspired 스타일 ─────────────────────────────────────────────
-    # Colors
-    C_INK    = "1D1D1F"   # Apple near-black
-    C_BLUE   = "0071E3"   # Apple blue
-    C_DARK   = "1D1D1F"   # title background
+    FONT_MAIN = _get_excel_font()
+
+    # ── 색상 ──────────────────────────────────────────────────────────────
+    C_INK    = "1D1D1F"
+    C_BLUE   = "0071E3"
+    C_DARK   = "1D1D1F"
     C_WHITE  = "FFFFFF"
-    C_GRAY6  = "F5F5F7"   # Apple system gray 6 (meta bg)
+    C_GRAY6  = "F5F5F7"
     C_ROW0   = "FFFFFF"
-    C_ROW1   = "F9F9FB"   # very subtle alternating tint
-    C_DATE   = "EBF3FF"   # date cell soft blue
-    C_BORDER = "C7C7CC"   # Apple separator
+    C_ROW1   = "F9F9FB"
+    C_DATE   = "EBF3FF"
+    C_BORDER = "C7C7CC"
 
     thin = Side(style="thin", color=C_BORDER)
     bdr  = Border(left=thin, right=thin, top=thin, bottom=thin)
@@ -207,14 +231,14 @@ def build_excel(records: list, meta: dict, monday: date) -> bytes:
     lft  = Alignment(horizontal="left",   vertical="center",
                      wrap_text=False, shrink_to_fit=True)
 
-    SZ = 10   # uniform body font size
+    SZ = 10   # 전체 통일 폰트 크기
 
-    f_title = Font(bold=True, color=C_WHITE, name="맑은 고딕", size=13)
-    f_head  = Font(bold=True, color=C_WHITE, name="맑은 고딕", size=SZ)
-    f_meta  = Font(bold=True, color=C_INK,   name="맑은 고딕", size=SZ)
-    f_date  = Font(bold=True, color=C_BLUE,  name="맑은 고딕", size=SZ)
-    f_body  = Font(          color=C_INK,   name="맑은 고딕", size=SZ)
-    f_sig   = Font(          color=C_INK,   name="맑은 고딕", size=SZ)
+    f_title = Font(bold=True, color=C_WHITE, name=FONT_MAIN, size=13)
+    f_head  = Font(bold=True, color=C_WHITE, name=FONT_MAIN, size=SZ)
+    f_meta  = Font(bold=True, color=C_INK,   name=FONT_MAIN, size=SZ)
+    f_date  = Font(bold=True, color=C_BLUE,  name=FONT_MAIN, size=SZ)
+    f_body  = Font(          color=C_INK,   name=FONT_MAIN, size=SZ)
+    f_sig   = Font(          color=C_INK,   name=FONT_MAIN, size=SZ)
 
     fill_title = PatternFill("solid", fgColor=C_DARK)
     fill_head  = PatternFill("solid", fgColor=C_BLUE)
@@ -231,16 +255,14 @@ def build_excel(records: list, meta: dict, monday: date) -> bytes:
         "관심": ("34C759", C_WHITE),
     }
 
-    ROW_H = 34          # data row height (pt)  — taller for readability
+    ROW_H = 34
     NCOL  = 11
-    PC    = NCOL + 1    # photo column start (L)
-    PCW   = 20
-    PPH   = int(ROW_H * 4 * 1.333) - 4
-    PPW   = int(PCW  * 7.0)        - 4
+    PC    = NCOL + 1    # 사진 열 시작 (L열)
+    PCW   = 22          # 사진 열 너비
 
     HDR     = ["작성일","구분","측정시각","온도(°C)","습도(%)","체감온도(°C)",
                "단계","조치사항","기타내용","측정자","비고"]
-    CWIDTHS = [8.5, 6, 8, 6.5, 6.5, 9, 7, 14, 11, 8, 11]
+    CWIDTHS = [10, 7, 9, 7.5, 7.5, 10, 8, 17, 13, 10, 13]
 
     for i, w in enumerate(CWIDTHS, 1):
         ws.column_dimensions[get_column_letter(i)].width = w
@@ -253,17 +275,13 @@ def build_excel(records: list, meta: dict, monday: date) -> bytes:
     wk_lbl  = (f"{monday.year}년 {monday.month}월 {week_label_ko(wk_info[0])}"
                if wk_info else "")
 
-    # ── 행 1 : 제목 ───────────────────────────────────────────────────────
-    ws.merge_cells(f"A1:{get_column_letter(NCOL)}1")
+    # ── 행 1 : 제목 (A1:O1 전체 병합) ────────────────────────────────────
+    ws.merge_cells(f"A1:{get_column_letter(PC+3)}1")
     c = ws["A1"]; c.value = "체감온도 기록관리 대장"
     c.font = f_title; c.alignment = ctr; c.fill = fill_title; c.border = bdr
-    ws.merge_cells(f"{get_column_letter(PC)}1:{get_column_letter(PC+3)}2")
-    ph = ws[f"{get_column_letter(PC)}1"]
-    ph.value = "사진대지"; ph.fill = fill_photo; ph.font = f_head
-    ph.alignment = ctr; ph.border = bdr
-    ws.row_dimensions[1].height = 28
+    ws.row_dimensions[1].height = 38
 
-    # ── 행 2 : 메타 정보 ──────────────────────────────────────────────────
+    # ── 행 2 : 메타 정보 + 사진대지 ──────────────────────────────────────
     ws.merge_cells("A2:C2"); ws.merge_cells("D2:F2")
     ws.merge_cells("G2:I2"); ws.merge_cells("J2:K2")
     for addr, val in [("A2", f"현장명: {meta.get('현장명','')}"),
@@ -272,6 +290,10 @@ def build_excel(records: list, meta: dict, monday: date) -> bytes:
                       ("J2", wk_lbl)]:
         c = ws[addr]; c.value = val
         c.font = f_meta; c.alignment = lft; c.border = bdr; c.fill = fill_meta
+    ws.merge_cells(f"{get_column_letter(PC)}2:{get_column_letter(PC+3)}2")
+    ph = ws[f"{get_column_letter(PC)}2"]
+    ph.value = "사진대지"; ph.fill = fill_photo; ph.font = f_head
+    ph.alignment = ctr; ph.border = bdr
     ws.row_dimensions[2].height = 22
 
     # ── 행 3 : 컬럼 헤더 ──────────────────────────────────────────────────
@@ -283,7 +305,7 @@ def build_excel(records: list, meta: dict, monday: date) -> bytes:
         c.fill = fill_photo; c.font = f_head; c.alignment = ctr; c.border = bdr
     ws.row_dimensions[3].height = 22
 
-    # ── 조치사항 드롭다운 데이터 유효성 ──────────────────────────────────
+    # ── 조치사항 드롭다운 ─────────────────────────────────────────────────
     dv = DataValidation(
         type="list",
         formula1='"N/A,추가휴식시간부여,보냉장구지급,작업시간대조정,작업중지,기타"',
@@ -311,50 +333,40 @@ def build_excel(records: list, meta: dict, monday: date) -> bytes:
             RH  = rec.get("습도(%)")
 
             row_data = [
-                f"{d.month}/{d.day}({DAYS_KO[d.weekday()]})",   # A
-                slot,                                            # B
-                rec.get("측정시각", ""),                         # C
-                T  if T  is not None else "",                    # D 온도
-                RH if RH is not None else "",                    # E 습도
-                # F 체감온도 → 수식 (아래에서 별도 처리)
-                # G 단계     → 수식 (아래에서 별도 처리)
-                "",                                              # F placeholder
-                "",                                              # G placeholder
-                act if act else "N/A",                          # H 조치사항
-                rec.get("기타내용","") if act == "기타" else "", # I
-                rec.get("측정자",""),                            # J
-                rec.get("비고",""),                              # K
+                f"{d.month}/{d.day}({DAYS_KO[d.weekday()]})",
+                slot,
+                rec.get("측정시각", ""),
+                T  if T  is not None else "",
+                RH if RH is not None else "",
+                "", "",   # F, G: 수식으로 처리
+                act if act else "N/A",
+                rec.get("기타내용","") if act == "기타" else "",
+                rec.get("측정자",""),
+                rec.get("비고",""),
             ]
 
             for ci, val in enumerate(row_data, 1):
                 c = ws.cell(row=row_num, column=ci, value=val)
-                c.font   = f_body
-                c.alignment = ctr
-                c.border = bdr
-                c.fill   = dfill
+                c.font = f_body; c.alignment = ctr
+                c.border = bdr; c.fill = dfill
                 if ci in (4, 5) and val != "":
                     c.number_format = "0.0"
 
-            # 체감온도 수식 (F열, col 6)
+            # 체감온도 수식 F열 — LET 미사용(구형 Excel 호환)
             dr = f"D{row_num}"; er = f"E{row_num}"
-            tw = (f"{dr}*ATAN(0.151977*SQRT({er}+8.313659))"
+            tw = (f"({dr}*ATAN(0.151977*SQRT({er}+8.313659))"
                   f"+ATAN({dr}+{er})-ATAN({er}-1.67633)"
-                  f"+0.00391838*{er}^1.5*ATAN(0.023101*{er})-4.686035")
+                  f"+0.00391838*{er}^1.5*ATAN(0.023101*{er})-4.686035)")
             hi_formula = (
                 f'=IF(AND({dr}<>"",{er}<>""),'
-                f'LET(Tw,{tw},'
-                f'ROUND(-0.2442+0.55399*Tw+0.45535*{dr}'
-                f'-0.0022*Tw^2+0.00278*Tw*{dr}+3.0,1)),"")'
+                f'ROUND(-0.2442+0.55399*{tw}+0.45535*{dr}'
+                f'-0.0022*{tw}^2+0.00278*{tw}*{dr}+3.0,1),"")'
             )
             fc = ws.cell(row=row_num, column=6)
-            fc.value       = hi_formula
-            fc.font        = f_body
-            fc.alignment   = ctr
-            fc.border      = bdr
-            fc.fill        = dfill
-            fc.number_format = "0.0"
+            fc.value = hi_formula; fc.font = f_body; fc.alignment = ctr
+            fc.border = bdr; fc.fill = dfill; fc.number_format = "0.0"
 
-            # 단계 수식 (G열, col 7)
+            # 단계 수식 G열
             fr = f"F{row_num}"
             lv_formula = (
                 f'=IF({fr}="","",IF({fr}>=38,"위험",'
@@ -362,29 +374,21 @@ def build_excel(records: list, meta: dict, monday: date) -> bytes:
                 f'IF({fr}>=31,"관심","-")))))'
             )
             gc = ws.cell(row=row_num, column=7)
-            gc.value     = lv_formula
-            gc.font      = f_body
-            gc.alignment = ctr
-            gc.border    = bdr
-            gc.fill      = dfill
+            gc.value = lv_formula; gc.font = f_body; gc.alignment = ctr
+            gc.border = bdr; gc.fill = dfill
 
-            # 조치사항 드롭다운 적용
             dv.add(ws.cell(row=row_num, column=8))
-
             row_num += 1
 
-        # 작성일 병합
+        # 작성일 열 병합
         ws.merge_cells(start_row=rs, start_column=1, end_row=re_, end_column=1)
         dc = ws.cell(row=rs, column=1)
-        dc.font = f_date
-        dc.alignment = ctr
-        dc.fill = fill_date if even else fill_date1
-        dc.border = bdr
+        dc.font = f_date; dc.alignment = ctr
+        dc.fill = fill_date if even else fill_date1; dc.border = bdr
 
-        # 사진 삽입
+        # 사진 삽입 — TwoCellAnchor로 셀에 꽉 채움
         for si, slot in enumerate(SLOTS):
-            col   = PC + si
-            col_l = get_column_letter(col)
+            col = PC + si
             ws.merge_cells(start_row=rs, start_column=col, end_row=re_, end_column=col)
             tc = ws.cell(row=rs, column=col)
             tc.border = bdr; tc.alignment = ctr; tc.fill = dfill
@@ -392,10 +396,14 @@ def build_excel(records: list, meta: dict, monday: date) -> bytes:
             if rec and rec.get("_bytes"):
                 try:
                     pil = Image.open(io.BytesIO(rec["_bytes"])).convert("RGB")
-                    pil = pil.resize((PPW, PPH), Image.LANCZOS)
                     buf = io.BytesIO(); pil.save(buf, format="PNG"); buf.seek(0)
-                    xi = XLImage(buf); xi.width = PPW; xi.height = PPH
-                    ws.add_image(xi, f"{col_l}{rs}")
+                    xi = XLImage(buf)
+                    anc = TwoCellAnchor()
+                    anc._from = AnchorMarker(col=col-1, colOff=0, row=rs-1, rowOff=0)
+                    anc.to    = AnchorMarker(col=col,   colOff=0, row=re_,  rowOff=0)
+                    anc.editAs = "twoCell"
+                    xi.anchor = anc
+                    ws.add_image(xi)
                 except Exception:
                     tc.value = "⚠"
 
@@ -403,7 +411,7 @@ def build_excel(records: list, meta: dict, monday: date) -> bytes:
     for r in range(4, row_num):
         ws.row_dimensions[r].height = ROW_H
 
-    # ── 단계 조건부 서식 (G열) ──────────────────────────────────────────
+    # ── 단계 조건부 서식 ──────────────────────────────────────────────────
     g_range = f"G4:G{row_num - 1}"
     for lv, (bg, fg) in lv_colors.items():
         ws.conditional_formatting.add(
@@ -411,7 +419,7 @@ def build_excel(records: list, meta: dict, monday: date) -> bytes:
             CellIsRule(
                 operator="equal", formula=[f'"{lv}"'],
                 fill=PatternFill("solid", fgColor=bg),
-                font=Font(color=fg, bold=True, name="맑은 고딕", size=SZ),
+                font=Font(color=fg, bold=True, name=FONT_MAIN, size=SZ),
             ),
         )
 
@@ -427,12 +435,12 @@ def build_excel(records: list, meta: dict, monday: date) -> bytes:
         ws.merge_cells(start_row=leg, start_column=c1, end_row=leg, end_column=c2)
         c = ws.cell(row=leg, column=c1, value=lbl)
         c.fill = PatternFill("solid", fgColor=bg)
-        c.font = Font(color=fg, bold=True, name="맑은 고딕", size=9)
+        c.font = Font(color=fg, bold=True, name=FONT_MAIN, size=SZ)
         c.alignment = ctr; c.border = bdr
     ws.row_dimensions[leg].height = 16
     row_num += 1
 
-    # ── 서명란 ──────────────────────────────────────────────────────────────
+    # ── 서명란 ────────────────────────────────────────────────────────────
     sig = row_num
     for label, c1, c2 in [("작성자", 1, 3), ("검토자", 4, 7), ("승인자", 8, 11)]:
         ws.merge_cells(start_row=sig, start_column=c1, end_row=sig, end_column=c2)
@@ -444,10 +452,10 @@ def build_excel(records: list, meta: dict, monday: date) -> bytes:
     ws.row_dimensions[sig].height = ROW_H * 1.6
     row_num += 1
 
-    # ── 인쇄 설정 (A4 가로, 1페이지 폭) ─────────────────────────────────
+    # ── 인쇄 설정 (A4 가로) ──────────────────────────────────────────────
     ws.print_area = f"A1:{get_column_letter(PC+3)}{row_num-1}"
     ws.page_setup.orientation = "landscape"
-    ws.page_setup.paperSize   = 9   # A4
+    ws.page_setup.paperSize   = 9
     ws.page_setup.fitToPage   = True
     ws.page_setup.fitToWidth  = 1
     ws.page_setup.fitToHeight = 0
