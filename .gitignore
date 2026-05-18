@@ -1,0 +1,21 @@
+# Streamlit secrets (API 키 포함 - 절대 업로드 금지)
+.streamlit/secrets.toml
+
+# 앱 데이터
+.app_history.json
+
+# 테스트 이미지
+*.jpg
+*.jpeg
+*.png
+
+# Python 캐시
+__pycache__/
+*.pyc
+*.pyo
+
+# Excel 임시파일
+~$*.xlsx
+
+# 로그
+error.log
