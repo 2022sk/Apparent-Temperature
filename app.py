@@ -833,11 +833,13 @@ for wk_monday in all_mondays:
 
     grid_keys = [r["_key"] for r in grid_rows]
     df = pd.DataFrame([{c: r[c] for c in DISPLAY_COLS} for r in grid_rows])
+    df.insert(0, "삭제", False)
 
     edited = st.data_editor(
         df, use_container_width=True, num_rows="fixed", hide_index=True,
         key=f"editor_{wk_monday.isoformat()}",
         column_config={
+            "삭제":         st.column_config.CheckboxColumn("🗑", default=False, width=40),
             "날짜":         st.column_config.TextColumn("날짜",     disabled=True, width=90),
             "구분":         st.column_config.TextColumn("구분",     disabled=True, width=70),
             "측정시각":     st.column_config.TextColumn("측정시각", width=80),
@@ -851,6 +853,18 @@ for wk_monday in all_mondays:
             "비고":         st.column_config.TextColumn("비고",     width=130),
         },
     )
+
+    # 체크된 행 삭제
+    del_indices = [i for i in range(len(grid_keys)) if edited.iloc[i]["삭제"]]
+    if del_indices:
+        del_keys = {grid_keys[i] for i in del_indices}
+        if st.button(f"🗑 선택한 {len(del_indices)}행 초기화",
+                     key=f"del_{wk_monday.isoformat()}", type="secondary"):
+            st.session_state.records = [
+                r for r in st.session_state.records
+                if (r.get("_date",""), r.get("_slot","")) not in del_keys
+            ]
+            st.rerun()
 
     for row_i, key in enumerate(grid_keys):
         row = {k: _nan_to_none(v) for k, v in edited.iloc[row_i].to_dict().items()}
