@@ -518,6 +518,9 @@ def _extract_one(client, rec: dict):
 if "records" not in st.session_state:
     st.session_state.records = []
 
+if "uploader_key" not in st.session_state:
+    st.session_state.uploader_key = 0
+
 if "meta" not in st.session_state:
     now = datetime.now()
     weeks = get_month_weeks(now.year, now.month)
@@ -633,6 +636,7 @@ with st.sidebar:
         _mon_str = monday.isoformat()
         # 세션 전체 초기화 후 선택 주차의 저장 기록만 로드
         st.session_state.records = []
+        st.session_state.uploader_key += 1
         for _r in _h.get("records", []):
             _rm = _r.get("_monday","")
             if not _rm and _r.get("_date"):
@@ -703,6 +707,7 @@ DISPLAY_COLS = ["날짜","구분","측정시각","온도(°C)","습도(%)","체�
 uploaded = st.file_uploader(
     "📂  온습도계 사진 선택 (여러 장 동시 선택 가능, 업로드 시 자동 리사이즈)",
     type=["jpg","jpeg","png","bmp"], accept_multiple_files=True,
+    key=f"uploader_{st.session_state.uploader_key}",
 )
 
 if uploaded:
@@ -752,7 +757,9 @@ with b2:
         st.rerun()
 with b3:
     if st.button("🗑  전체 초기화", use_container_width=True):
-        st.session_state.records = []; st.rerun()
+        st.session_state.records = []
+        st.session_state.uploader_key += 1
+        st.rerun()
 
 # ── AI 추출 ──────────────────────────────────────────────────────────────
 if do_extract and api_key:
@@ -955,6 +962,7 @@ for wk_monday in all_mondays:
                     r for r in st.session_state.records
                     if (r.get("_date",""), r.get("_slot","")) not in del_keys
                 ]
+                st.session_state.uploader_key += 1
                 st.rerun()
     with _ac2:
         _has_done = any(r.get("_done") for r in st.session_state.records)
