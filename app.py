@@ -461,8 +461,6 @@ if "past_active_recs" not in st.session_state:
     st.session_state.past_active_recs = []
 if "past_sel_key" not in st.session_state:
     st.session_state.past_sel_key = None
-if "view_mode" not in st.session_state:
-    st.session_state.view_mode = "작성"
 
 # ── 사이드바 ───────────────────────────────────────────────────────────────
 with st.sidebar:
@@ -548,15 +546,19 @@ with st.sidebar:
     meta["week_n"] = chosen[0]; meta["monday"] = chosen[2]
     monday: date = meta["monday"]
 
-    vm_c1, vm_c2 = st.columns(2)
-    with vm_c1:
-        if st.button("✏️ 기록 작성", use_container_width=True,
-                     type="primary" if st.session_state.view_mode == "작성" else "secondary"):
-            st.session_state.view_mode = "작성"; st.rerun()
-    with vm_c2:
-        if st.button("🔍 이전기록 조회", use_container_width=True,
-                     type="primary" if st.session_state.view_mode == "조회" else "secondary"):
-            st.session_state.view_mode = "조회"; st.rerun()
+    if st.button("📋 기록 작성 / 이전기록 불러오기", use_container_width=True, type="primary"):
+        _h = load_history()
+        _mon_str = monday.isoformat()
+        _existing = {(r.get("_date",""), r.get("_slot","")) for r in st.session_state.records}
+        for _r in _h.get("records", []):
+            if _r.get("_monday","") == _mon_str:
+                _k = (_r.get("_date",""), _r.get("_slot",""))
+                if _k not in _existing:
+                    st.session_state.records.append(dict(_r,
+                        _bytes=(base64.b64decode(_r["_bytes_b64"]) if _r.get("_bytes_b64") else None),
+                        _done=True
+                    ))
+        st.rerun()
 
     st.markdown("---")
     st.markdown("**📊 KOSHA 폭염 단계**")
@@ -610,597 +612,299 @@ def _nan_to_none(v):
 DISPLAY_COLS = ["날짜","구분","측정시각","온도(°C)","습도(%)","체감온도(°C)","단계","조치사항","기타내용","측정자","비고"]
 
 # ══════════════════════════════════════════════════════════ 기록 작성 ════════
-if st.session_state.view_mode == "작성":
-    uploaded = st.file_uploader(
-        "📂  온습도계 사진 선택 (여러 장 동시 선택 가능, 업로드 시 자동 리사이즈)",
-        type=["jpg","jpeg","png","bmp"], accept_multiple_files=True,
-    )
+uploaded = st.file_uploader(
+    "📂  온습도계 사진 선택 (여러 장 동시 선택 가능, 업로드 시 자동 리사이즈)",
+    type=["jpg","jpeg","png","bmp"], accept_multiple_files=True,
+)
 
-    if uploaded:
-        existing_names = {r["_filename"] for r in st.session_state.records}
-        existing_slots = {(r["_date"], r["_slot"]): i for i, r in enumerate(st.session_state.records)}
-        added = 0
-        for f in uploaded:
-            if f.name in existing_names:
-                continue
-            raw    = f.read()
-            rbytes = resize_image(raw)
-            d_str  = parse_date(f.name)
-            slot   = slot_from_filename(f.name)
-            d_obj  = date.fromisoformat(d_str) if d_str else monday
-            rec_monday = d_obj - timedelta(days=d_obj.weekday())
-            d_key  = d_obj.isoformat()
-            sk = (d_key, slot)
-            if sk in existing_slots:
-                idx = existing_slots[sk]
-                st.session_state.records[idx].update({"_bytes": rbytes, "_filename": f.name, "_done": False})
-            else:
-                st.session_state.records.append({
-                    "_filename": f.name, "_bytes": rbytes,
-                    "_date": d_key, "_slot": slot, "_done": False,
-                    "_monday": rec_monday.isoformat(),
-                    "날짜": f"{d_obj.month}/{d_obj.day}({DAYS_KO[d_obj.weekday()]})",
-                    "구분": slot, "측정시각": "", "온도(°C)": None,
-                    "습도(%)": None, "체감온도(°C)": None, "단계": "",
-                    "조치사항": "N/A", "기타내용": "",
-                    "측정자": meta.get("측정자",""),
-                    "비고": "",
-                })
-            added += 1
-        if added:
-            st.toast(f"{added}개 사진 추가 (리사이즈 완료)", icon="📸")
-
-    # ── 버튼 행 ──────────────────────────────────────────────────────────────
-    b1, b2, b3, _ = st.columns([1.3, 1, 1, 3.1])
-    with b1:
-        do_extract = st.button("🤖  AI 자동 추출", type="primary",
-                                disabled=(not api_key or not st.session_state.records),
-                                use_container_width=True)
-    with b2:
-        if st.button("🔄  미완료 재추출", use_container_width=True,
-                     disabled=not st.session_state.records):
-            for r in st.session_state.records: r["_done"] = False
-            st.rerun()
-    with b3:
-        if st.button("🗑  전체 초기화", use_container_width=True):
-            st.session_state.records = []; st.rerun()
-
-    # ── AI 추출 ──────────────────────────────────────────────────────────────
-    if do_extract and api_key:
-        pending = [r for r in st.session_state.records if not r["_done"] and r.get("_bytes")]
-        if not pending:
-            st.info("추출할 항목이 없습니다.")
+if uploaded:
+    existing_names = {r["_filename"] for r in st.session_state.records}
+    existing_slots = {(r["_date"], r["_slot"]): i for i, r in enumerate(st.session_state.records)}
+    added = 0
+    for f in uploaded:
+        if f.name in existing_names:
+            continue
+        raw    = f.read()
+        rbytes = resize_image(raw)
+        d_str  = parse_date(f.name)
+        slot   = slot_from_filename(f.name)
+        d_obj  = date.fromisoformat(d_str) if d_str else monday
+        rec_monday = d_obj - timedelta(days=d_obj.weekday())
+        d_key  = d_obj.isoformat()
+        sk = (d_key, slot)
+        if sk in existing_slots:
+            idx = existing_slots[sk]
+            st.session_state.records[idx].update({"_bytes": rbytes, "_filename": f.name, "_done": False})
         else:
-            client = google_genai.Client(api_key=api_key)
-            bar  = st.progress(0); stat = st.empty()
-            stat.caption(f"⏳ {len(pending)}장 병렬 추출 중…")
-            errors = []; done_count = 0
-            with ThreadPoolExecutor(max_workers=min(4, len(pending))) as ex:
-                futures = {ex.submit(_extract_one, client, rec): rec for rec in pending}
-                for fut in as_completed(futures):
-                    rec = futures[fut]; done_count += 1
-                    bar.progress(done_count / len(pending))
-                    try:
-                        fut.result()
-                        pct = int(done_count / len(pending) * 100)
-                        stat.caption(f"⏳ {done_count}/{len(pending)} ({pct}%) – {rec['_filename']}")
-                    except Exception as e:
-                        errors.append(rec["_filename"])
-                        st.error(f"❌ **{rec['_filename']}** 오류: {e}")
-            bar.progress(1.0)
-            stat.success("✅ 추출 완료!" if not errors else f"⚠️ {len(errors)}개 실패")
-            st.rerun()
+            st.session_state.records.append({
+                "_filename": f.name, "_bytes": rbytes,
+                "_date": d_key, "_slot": slot, "_done": False,
+                "_monday": rec_monday.isoformat(),
+                "날짜": f"{d_obj.month}/{d_obj.day}({DAYS_KO[d_obj.weekday()]})",
+                "구분": slot, "측정시각": "", "온도(°C)": None,
+                "습도(%)": None, "체감온도(°C)": None, "단계": "",
+                "조치사항": "N/A", "기타내용": "",
+                "측정자": meta.get("측정자",""),
+                "비고": "",
+            })
+        added += 1
+    if added:
+        st.toast(f"{added}개 사진 추가 (리사이즈 완료)", icon="📸")
 
-    # ── 주별 그룹화 헬퍼 ────────────────────────────────────────────────────
-    def _rec_monday_wk(r):
-        ds = r.get("_monday") or r.get("_date", "")
-        if ds:
-            try:
-                d = date.fromisoformat(ds[:10])
-                return d - timedelta(days=d.weekday())
-            except:
-                pass
-        return monday
+# ── 버튼 행 ──────────────────────────────────────────────────────────────
+b1, b2, b3, _ = st.columns([1.3, 1, 1, 3.1])
+with b1:
+    do_extract = st.button("🤖  AI 자동 추출", type="primary",
+                            disabled=(not api_key or not st.session_state.records),
+                            use_container_width=True)
+with b2:
+    if st.button("🔄  미완료 재추출", use_container_width=True,
+                 disabled=not st.session_state.records):
+        for r in st.session_state.records: r["_done"] = False
+        st.rerun()
+with b3:
+    if st.button("🗑  전체 초기화", use_container_width=True):
+        st.session_state.records = []; st.rerun()
 
-    all_mondays = sorted({_rec_monday_wk(r) for r in st.session_state.records}) if st.session_state.records else [monday]
-
-    # ── KPI 요약 (전체) ──────────────────────────────────────────────────────
-    done_recs = [r for r in st.session_state.records if r["_done"]]
-    if done_recs:
-        temps = [r["온도(°C)"]    for r in done_recs if r["온도(°C)"]    is not None]
-        feels = [r["체감온도(°C)"] for r in done_recs if r["체감온도(°C)"] is not None]
-        humid = [r["습도(%)"]     for r in done_recs if r["습도(%)"]     is not None]
-        c1,c2,c3,c4 = st.columns(4)
-        for col, val, lbl, cls in [
-            (c1, len(done_recs), "측정 건수", "kpi-card-soft"),
-            (c2, f"{max(temps):.1f}°C" if temps else "-", "최고 온도", "kpi-card"),
-            (c3, f"{max(humid):.0f}%"  if humid else "-", "최고 습도", "kpi-card"),
-            (c4, f"{max(feels):.1f}°C" if feels else "-", "최고 체감온도", "kpi-card-hl"),
-        ]:
-            col.markdown(f'<div class="{cls}"><div class="kpi-val">{val}</div>'
-                         f'<div class="kpi-lbl">{lbl}</div></div>', unsafe_allow_html=True)
-        st.markdown("")
-
-    # ── 주별 섹션 ────────────────────────────────────────────────────────────
-    changed = False
-    for wk_monday in all_mondays:
-        wk_end  = wk_monday + timedelta(days=6)
-        wk_info = get_month_weeks(wk_monday.year, wk_monday.month)
-        wk_n    = next((w[0] for w in wk_info if w[2] == wk_monday), 1)
-        this_wk_str = (f"{wk_monday.year}년 {wk_monday.month}월 {week_label_ko(wk_n)}  "
-                       f"({wk_monday.month}/{wk_monday.day}~{wk_end.month}/{wk_end.day})")
-
-        wk_done = [r for r in st.session_state.records
-                   if _rec_monday_wk(r) == wk_monday and r["_done"]]
-
-        hc1, hc2 = st.columns([4, 1])
-        with hc1:
-            st.markdown(f'<div class="week-tag">📅 {this_wk_str}</div>', unsafe_allow_html=True)
-        with hc2:
-            if wk_done:
-                wk_all = [r for r in st.session_state.records if _rec_monday_wk(r) == wk_monday]
-                _code  = meta.get("현장코드","").strip()
-                _loc   = meta.get("위치","").strip() or "위치미정"
-                _cpfx  = f"({_code})" if _code else ""
-                fname  = f"{_cpfx}체감온도 기록관리 대장_{_loc}_{wk_monday.year}년{wk_monday.month}월{week_label_ko(wk_n)}.xlsx"
-                save_history(meta, wk_all, wk_monday)
-                st.download_button("💾 엑셀", key=f"dl_{wk_monday.isoformat()}",
-                    data=build_excel(wk_all, meta, wk_monday),
-                    file_name=fname,
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    use_container_width=True)
-            else:
-                st.button("💾 엑셀", disabled=True, key=f"dl_dis_{wk_monday.isoformat()}",
-                          use_container_width=True)
-
-        # 주간 차트
-        wk_hi_map = {(r.get("_date",""), r.get("_slot","")): r.get("체감온도(°C)")
-                     for r in wk_done}
-        if wk_hi_map:
-            day_labels = [
-                f"{(wk_monday+timedelta(days=di)).month}/{(wk_monday+timedelta(days=di)).day}"
-                f"({DAYS_KO[(wk_monday+timedelta(days=di)).weekday()]})"
-                for di in range(7)
-            ]
-            slot_colors = {"오전1":"#4A90E2","오전2":"#34C759","오후1":"#FF9500","오후2":"#FF3B30"}
-            fig = go.Figure()
-            for slot in SLOTS:
-                y_vals = [wk_hi_map.get(((wk_monday+timedelta(days=di)).isoformat(), slot))
-                          for di in range(7)]
-                fig.add_trace(go.Bar(
-                    name=slot, x=day_labels, y=y_vals,
-                    marker_color=slot_colors[slot], opacity=0.85,
-                    text=[f"{v:.1f}" if v is not None else "" for v in y_vals],
-                    textposition="outside", textfont=dict(size=9),
-                ))
-            for lbl, col, val in [("관심","#34C759",31),("주의","#FFCC00",33),
-                                   ("경고","#FF9500",35),("위험","#FF3B30",38)]:
-                fig.add_hline(y=val, line_dash="dot", line_color=col, line_width=1.5,
-                              annotation_text=f" {lbl} {val}°C", annotation_position="right",
-                              annotation_font=dict(size=9, color=col))
-            all_vals = [v for v in wk_hi_map.values() if v is not None]
-            y_min = min(min(all_vals) - 3, 28) if all_vals else 25
-            y_max = max(max(all_vals) + 4, 42) if all_vals else 42
-            fig.update_layout(
-                barmode="group", height=260,
-                margin=dict(l=0, r=80, t=8, b=0),
-                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-                yaxis=dict(title="체감온도(°C)", range=[y_min, y_max], gridcolor="#f0f0f0"),
-                xaxis=dict(tickfont=dict(size=11)),
-                plot_bgcolor="white", paper_bgcolor="white",
-            )
-            st.markdown('<div class="mac-card">', unsafe_allow_html=True)
-            st.plotly_chart(fig, use_container_width=True, key=f"chart_{wk_monday.isoformat()}")
-            st.markdown('</div>', unsafe_allow_html=True)
-
-        # 주간 데이터 그리드
-        rec_map_wk: dict[tuple, int] = {}
-        for idx, r in enumerate(st.session_state.records):
-            if _rec_monday_wk(r) == wk_monday:
-                rec_map_wk[(r.get("_date",""), r.get("_slot",""))] = idx
-
-        grid_rows = []
-        for di in range(7):
-            d = wk_monday + timedelta(days=di)
-            for slot in SLOTS:
-                key = (d.isoformat(), slot)
-                if key in rec_map_wk:
-                    r = st.session_state.records[rec_map_wk[key]]
-                    grid_rows.append({
-                        "날짜": f"{d.month}/{d.day}({DAYS_KO[d.weekday()]})",
-                        "구분": slot,
-                        "측정시각": r.get("측정시각",""),
-                        "온도(°C)": r.get("온도(°C)"),
-                        "습도(%)": r.get("습도(%)"),
-                        "체감온도(°C)": r.get("체감온도(°C)"),
-                        "단계": LEVEL_BADGE.get(r.get("단계",""), r.get("단계","")),
-                        "조치사항": r.get("조치사항","N/A"),
-                        "기타내용": r.get("기타내용",""),
-                        "측정자": r.get("측정자",""),
-                        "비고": r.get("비고",""),
-                        "_key": key,
-                    })
-                else:
-                    grid_rows.append({
-                        "날짜": f"{d.month}/{d.day}({DAYS_KO[d.weekday()]})",
-                        "구분": slot,
-                        "측정시각": "", "온도(°C)": None, "습도(%)": None,
-                        "체감온도(°C)": None, "단계": "", "조치사항": "N/A",
-                        "기타내용": "", "측정자": meta.get("측정자",""), "비고": "",
-                        "_key": key,
-                    })
-
-        grid_keys = [r["_key"] for r in grid_rows]
-        df = pd.DataFrame([{c: r[c] for c in DISPLAY_COLS} for r in grid_rows])
-
-        edited = st.data_editor(
-            df, use_container_width=True, num_rows="fixed", hide_index=True,
-            key=f"editor_{wk_monday.isoformat()}",
-            column_config={
-                "날짜":         st.column_config.TextColumn("날짜",     disabled=True, width=90),
-                "구분":         st.column_config.TextColumn("구분",     disabled=True, width=70),
-                "측정시각":     st.column_config.TextColumn("측정시각", width=80),
-                "온도(°C)":     st.column_config.NumberColumn("온도(°C)",    format="%.1f°C", step=0.1, width=85),
-                "습도(%)":      st.column_config.NumberColumn("습도(%)",     format="%.0f%%", step=1,   width=75),
-                "체감온도(°C)": st.column_config.NumberColumn("체감온도(°C)", format="%.1f°C", disabled=True, width=100),
-                "단계":         st.column_config.TextColumn("단계",     disabled=True, width=60),
-                "조치사항":     st.column_config.SelectboxColumn("조치사항", options=ACTIONS, width=150),
-                "기타내용":     st.column_config.TextColumn("기타내용(기타 선택시)", width=130),
-                "측정자":       st.column_config.TextColumn("측정자",   width=80),
-                "비고":         st.column_config.TextColumn("비고",     width=130),
-            },
-        )
-
-        for row_i, key in enumerate(grid_keys):
-            row = {k: _nan_to_none(v) for k, v in edited.iloc[row_i].to_dict().items()}
-            T  = row["온도(°C)"]; RH = row["습도(%)"]
-            if T is not None and RH is not None:
+# ── AI 추출 ──────────────────────────────────────────────────────────────
+if do_extract and api_key:
+    pending = [r for r in st.session_state.records if not r["_done"] and r.get("_bytes")]
+    if not pending:
+        st.info("추출할 항목이 없습니다.")
+    else:
+        client = google_genai.Client(api_key=api_key)
+        bar  = st.progress(0); stat = st.empty()
+        stat.caption(f"⏳ {len(pending)}장 병렬 추출 중…")
+        errors = []; done_count = 0
+        with ThreadPoolExecutor(max_workers=min(4, len(pending))) as ex:
+            futures = {ex.submit(_extract_one, client, rec): rec for rec in pending}
+            for fut in as_completed(futures):
+                rec = futures[fut]; done_count += 1
+                bar.progress(done_count / len(pending))
                 try:
-                    hi = heat_index(float(T), float(RH))
-                    row["체감온도(°C)"] = hi
-                    row["단계"] = heat_label(hi)
-                except Exception:
-                    pass
-
-            if key in rec_map_wk:
-                r = st.session_state.records[rec_map_wk[key]]
-                for c in DISPLAY_COLS:
-                    old_val = _nan_to_none(r.get(c))
-                    if c not in ("날짜","구분","체감온도(°C)","단계") and old_val != row.get(c):
-                        r[c] = row.get(c); changed = True
-                r["체감온도(°C)"] = row.get("체감온도(°C)")
-                r["단계"] = heat_label(row["체감온도(°C)"]) if row.get("체감온도(°C)") is not None else ""
-            else:
-                if T is not None and RH is not None:
-                    d_str, slot = key
-                    try: d_obj = date.fromisoformat(d_str)
-                    except: d_obj = wk_monday
-                    st.session_state.records.append({
-                        "_filename": "", "_bytes": None,
-                        "_date": d_str, "_slot": slot, "_done": True,
-                        "_monday": wk_monday.isoformat(),
-                        "날짜": f"{d_obj.month}/{d_obj.day}({DAYS_KO[d_obj.weekday()]})",
-                        "구분": slot, **{c: row[c] for c in DISPLAY_COLS if c not in ("날짜","구분")},
-                    })
-                    changed = True
-
-    if changed:
+                    fut.result()
+                    pct = int(done_count / len(pending) * 100)
+                    stat.caption(f"⏳ {done_count}/{len(pending)} ({pct}%) – {rec['_filename']}")
+                except Exception as e:
+                    errors.append(rec["_filename"])
+                    st.error(f"❌ **{rec['_filename']}** 오류: {e}")
+        bar.progress(1.0)
+        stat.success("✅ 추출 완료!" if not errors else f"⚠️ {len(errors)}개 실패")
         st.rerun()
 
-    # ── 사진 미리보기 ────────────────────────────────────────────────────────
-    photo_recs = [r for r in st.session_state.records if r.get("_bytes")]
-    if photo_recs:
-        with st.expander("📷 사진 미리보기", expanded=False):
-            cols = st.columns(min(4, len(photo_recs)))
-            for i, rec in enumerate(photo_recs):
-                with cols[i % 4]:
-                    try:
-                        img = Image.open(io.BytesIO(rec["_bytes"]))
-                        lev = rec.get("단계","")
-                        cap = f"**{rec['_filename']}**\n{rec.get('구분','')}"
-                        if rec.get("온도(°C)") is not None:
-                            cap += f"\n{rec['온도(°C)']}°C / {rec['습도(%)']}%"
-                        if rec.get("체감온도(°C)") is not None:
-                            cap += f" → 체감 **{rec['체감온도(°C)']}°C** ({lev})"
-                        st.image(img, use_container_width=True)
-                        st.caption(cap)
-                    except Exception:
-                        st.caption(rec.get("_filename",""))
+# ── 주별 그룹화 헬퍼 ────────────────────────────────────────────────────
+def _rec_monday_wk(r):
+    ds = r.get("_monday") or r.get("_date", "")
+    if ds:
+        try:
+            d = date.fromisoformat(ds[:10])
+            return d - timedelta(days=d.weekday())
+        except:
+            pass
+    return monday
 
-# ══════════════════════════════════════════════════════════ 이전기록 조회 ════
-else:
-    h_fresh = load_history()
-    past_all = h_fresh.get("records", [])
+all_mondays = sorted({_rec_monday_wk(r) for r in st.session_state.records}) if st.session_state.records else [monday]
 
-    if not past_all:
-        st.info("저장된 기록이 없습니다.  \n**✏️ 기록 작성** 화면에서 AI 추출 후 **엑셀 저장** 버튼을 누르면 기록이 쌓입니다.")
-    else:
-        # ── 필터 ──────────────────────────────────────────────────────────────
-        cf1, cf2, cf3 = st.columns(3)
+# ── KPI 요약 (전체) ──────────────────────────────────────────────────────
+done_recs = [r for r in st.session_state.records if r["_done"]]
+if done_recs:
+    temps = [r["온도(°C)"]    for r in done_recs if r["온도(°C)"]    is not None]
+    feels = [r["체감온도(°C)"] for r in done_recs if r["체감온도(°C)"] is not None]
+    humid = [r["습도(%)"]     for r in done_recs if r["습도(%)"]     is not None]
+    c1,c2,c3,c4 = st.columns(4)
+    for col, val, lbl, cls in [
+        (c1, len(done_recs), "측정 건수", "kpi-card-soft"),
+        (c2, f"{max(temps):.1f}°C" if temps else "-", "최고 온도", "kpi-card"),
+        (c3, f"{max(humid):.0f}%"  if humid else "-", "최고 습도", "kpi-card"),
+        (c4, f"{max(feels):.1f}°C" if feels else "-", "최고 체감온도", "kpi-card-hl"),
+    ]:
+        col.markdown(f'<div class="{cls}"><div class="kpi-val">{val}</div>'
+                     f'<div class="kpi-lbl">{lbl}</div></div>', unsafe_allow_html=True)
+    st.markdown("")
 
-        with cf1:
-            locs = sorted({r.get("_위치","") for r in past_all if r.get("_위치","")})
-            if not locs:
-                locs = ["(위치 미지정)"]
-            sel_loc = st.selectbox("📍 측정위치", locs, key="p_loc")
+# ── 주별 섹션 ────────────────────────────────────────────────────────────
+changed = False
+for wk_monday in all_mondays:
+    wk_end  = wk_monday + timedelta(days=6)
+    wk_info = get_month_weeks(wk_monday.year, wk_monday.month)
+    wk_n    = next((w[0] for w in wk_info if w[2] == wk_monday), 1)
+    this_wk_str = (f"{wk_monday.year}년 {wk_monday.month}월 {week_label_ko(wk_n)}  "
+                   f"({wk_monday.month}/{wk_monday.day}~{wk_end.month}/{wk_end.day})")
 
-        loc_recs = [r for r in past_all if r.get("_위치","") == sel_loc]
+    wk_done = [r for r in st.session_state.records
+               if _rec_monday_wk(r) == wk_monday and r["_done"]]
 
-        with cf2:
-            years = sorted({r.get("_date","")[:4] for r in loc_recs if r.get("_date","")}, reverse=True)
-            if not years:
-                years = [str(date.today().year)]
-            sel_year = st.selectbox("📅 연도", years, key="p_year")
+    hc1, hc2 = st.columns([4, 1])
+    with hc1:
+        st.markdown(f'<div class="week-tag">📅 {this_wk_str}</div>', unsafe_allow_html=True)
+    with hc2:
+        if wk_done:
+            wk_all = [r for r in st.session_state.records if _rec_monday_wk(r) == wk_monday]
+            _code  = meta.get("현장코드","").strip()
+            _loc   = meta.get("위치","").strip() or "위치미정"
+            _cpfx  = f"({_code})" if _code else ""
+            fname  = f"{_cpfx}체감온도 기록관리 대장_{_loc}_{wk_monday.year}년{wk_monday.month}월{week_label_ko(wk_n)}.xlsx"
+            save_history(meta, wk_all, wk_monday)
+            st.download_button("💾 엑셀", key=f"dl_{wk_monday.isoformat()}",
+                data=build_excel(wk_all, meta, wk_monday),
+                file_name=fname,
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True)
+        else:
+            st.button("💾 엑셀", disabled=True, key=f"dl_dis_{wk_monday.isoformat()}",
+                      use_container_width=True)
 
-        yr_recs = [r for r in loc_recs if r.get("_date","").startswith(sel_year)]
+    # 주간 차트
+    wk_hi_map = {(r.get("_date",""), r.get("_slot","")): r.get("체감온도(°C)")
+                 for r in wk_done}
+    if wk_hi_map:
+        day_labels = [
+            f"{(wk_monday+timedelta(days=di)).month}/{(wk_monday+timedelta(days=di)).day}"
+            f"({DAYS_KO[(wk_monday+timedelta(days=di)).weekday()]})"
+            for di in range(7)
+        ]
+        slot_colors = {"오전1":"#4A90E2","오전2":"#34C759","오후1":"#FF9500","오후2":"#FF3B30"}
+        fig = go.Figure()
+        for slot in SLOTS:
+            y_vals = [wk_hi_map.get(((wk_monday+timedelta(days=di)).isoformat(), slot))
+                      for di in range(7)]
+            fig.add_trace(go.Bar(
+                name=slot, x=day_labels, y=y_vals,
+                marker_color=slot_colors[slot], opacity=0.85,
+                text=[f"{v:.1f}" if v is not None else "" for v in y_vals],
+                textposition="outside", textfont=dict(size=9),
+            ))
+        for lbl, col, val in [("관심","#34C759",31),("주의","#FFCC00",33),
+                               ("경고","#FF9500",35),("위험","#FF3B30",38)]:
+            fig.add_hline(y=val, line_dash="dot", line_color=col, line_width=1.5,
+                          annotation_text=f" {lbl} {val}°C", annotation_position="right",
+                          annotation_font=dict(size=9, color=col))
+        all_vals = [v for v in wk_hi_map.values() if v is not None]
+        y_min = min(min(all_vals) - 3, 28) if all_vals else 25
+        y_max = max(max(all_vals) + 4, 42) if all_vals else 42
+        fig.update_layout(
+            barmode="group", height=260,
+            margin=dict(l=0, r=80, t=8, b=0),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+            yaxis=dict(title="체감온도(°C)", range=[y_min, y_max], gridcolor="#f0f0f0"),
+            xaxis=dict(tickfont=dict(size=11)),
+            plot_bgcolor="white", paper_bgcolor="white",
+        )
+        st.markdown('<div class="mac-card">', unsafe_allow_html=True)
+        st.plotly_chart(fig, use_container_width=True, key=f"chart_{wk_monday.isoformat()}")
+        st.markdown('</div>', unsafe_allow_html=True)
 
-        with cf3:
-            monday_map = {}
-            for r in yr_recs:
-                ms = r.get("_monday","")
-                if not ms and r.get("_date"):
-                    try:
-                        d = date.fromisoformat(r["_date"])
-                        ms = (d - timedelta(days=d.weekday())).isoformat()
-                    except:
-                        continue
-                if ms and ms not in monday_map:
-                    try:
-                        mon = date.fromisoformat(ms)
-                        sun = mon + timedelta(days=6)
-                        wk_info = get_month_weeks(mon.year, mon.month)
-                        wk_n = next((w[0] for w in wk_info if w[2] == mon), 1)
-                        monday_map[ms] = (f"{mon.year}년 {mon.month}월 {week_label_ko(wk_n)}"
-                                          f"  ({mon.month}/{mon.day}~{sun.month}/{sun.day})")
-                    except:
-                        monday_map[ms] = ms
+    # 주간 데이터 그리드
+    rec_map_wk: dict[tuple, int] = {}
+    for idx, r in enumerate(st.session_state.records):
+        if _rec_monday_wk(r) == wk_monday:
+            rec_map_wk[(r.get("_date",""), r.get("_slot",""))] = idx
 
-            if not monday_map:
-                st.warning("해당 조건의 기록이 없습니다.")
+    grid_rows = []
+    for di in range(7):
+        d = wk_monday + timedelta(days=di)
+        for slot in SLOTS:
+            key = (d.isoformat(), slot)
+            if key in rec_map_wk:
+                r = st.session_state.records[rec_map_wk[key]]
+                grid_rows.append({
+                    "날짜": f"{d.month}/{d.day}({DAYS_KO[d.weekday()]})",
+                    "구분": slot,
+                    "측정시각": r.get("측정시각",""),
+                    "온도(°C)": r.get("온도(°C)"),
+                    "습도(%)": r.get("습도(%)"),
+                    "체감온도(°C)": r.get("체감온도(°C)"),
+                    "단계": LEVEL_BADGE.get(r.get("단계",""), r.get("단계","")),
+                    "조치사항": r.get("조치사항","N/A"),
+                    "기타내용": r.get("기타내용",""),
+                    "측정자": r.get("측정자",""),
+                    "비고": r.get("비고",""),
+                    "_key": key,
+                })
             else:
-                week_opts = sorted(monday_map.keys(), reverse=True)
-                sel_ms = st.selectbox("주차 선택", week_opts,
-                                      format_func=lambda k: monday_map[k], key="p_week")
+                grid_rows.append({
+                    "날짜": f"{d.month}/{d.day}({DAYS_KO[d.weekday()]})",
+                    "구분": slot,
+                    "측정시각": "", "온도(°C)": None, "습도(%)": None,
+                    "체감온도(°C)": None, "단계": "", "조치사항": "N/A",
+                    "기타내용": "", "측정자": meta.get("측정자",""), "비고": "",
+                    "_key": key,
+                })
 
-                # ── 선택 주차 기록 로드 ──────────────────────────────────────
-                sel_key = (sel_loc, sel_year, sel_ms)
-                if st.session_state.get("past_sel_key") != sel_key:
-                    st.session_state.past_sel_key = sel_key
-                    base = [r for r in yr_recs
-                            if (r.get("_monday","") or
-                                ((date.fromisoformat(r["_date"]) -
-                                  timedelta(days=date.fromisoformat(r["_date"]).weekday())).isoformat()
-                                 if r.get("_date") else "")) == sel_ms]
-                    st.session_state.past_active_recs = [
-                        dict(r, _bytes=(base64.b64decode(r["_bytes_b64"])
-                                        if r.get("_bytes_b64") else None))
-                        for r in base
-                    ]
+    grid_keys = [r["_key"] for r in grid_rows]
+    df = pd.DataFrame([{c: r[c] for c in DISPLAY_COLS} for r in grid_rows])
 
-                p_recs = st.session_state.past_active_recs
+    edited = st.data_editor(
+        df, use_container_width=True, num_rows="fixed", hide_index=True,
+        key=f"editor_{wk_monday.isoformat()}",
+        column_config={
+            "날짜":         st.column_config.TextColumn("날짜",     disabled=True, width=90),
+            "구분":         st.column_config.TextColumn("구분",     disabled=True, width=70),
+            "측정시각":     st.column_config.TextColumn("측정시각", width=80),
+            "온도(°C)":     st.column_config.NumberColumn("온도(°C)",    format="%.1f°C", step=0.1, width=85),
+            "습도(%)":      st.column_config.NumberColumn("습도(%)",     format="%.0f%%", step=1,   width=75),
+            "체감온도(°C)": st.column_config.NumberColumn("체감온도(°C)", format="%.1f°C", disabled=True, width=100),
+            "단계":         st.column_config.TextColumn("단계",     disabled=True, width=60),
+            "조치사항":     st.column_config.SelectboxColumn("조치사항", options=ACTIONS, width=150),
+            "기타내용":     st.column_config.TextColumn("기타내용(기타 선택시)", width=130),
+            "측정자":       st.column_config.TextColumn("측정자",   width=80),
+            "비고":         st.column_config.TextColumn("비고",     width=130),
+        },
+    )
 
-                # ── 사진 추가 업로드 ─────────────────────────────────────────
-                p_uploaded = st.file_uploader(
-                    "📂  사진 추가 (AI 자동 추출 후 저장 버튼을 눌러주세요)",
-                    type=["jpg","jpeg","png","bmp"], accept_multiple_files=True,
-                    key="past_uploader",
-                )
+    for row_i, key in enumerate(grid_keys):
+        row = {k: _nan_to_none(v) for k, v in edited.iloc[row_i].to_dict().items()}
+        T  = row["온도(°C)"]; RH = row["습도(%)"]
+        if T is not None and RH is not None:
+            try:
+                hi = heat_index(float(T), float(RH))
+                row["체감온도(°C)"] = hi
+                row["단계"] = heat_label(hi)
+            except Exception:
+                pass
 
-                if p_uploaded:
-                    p_slot_map = {(r.get("_date",""), r.get("_slot","")): i
-                                  for i, r in enumerate(p_recs)}
-                    p_names = {r.get("_filename","") for r in p_recs}
-                    p_added = 0
-                    for f in p_uploaded:
-                        if f.name in p_names:
-                            continue
-                        raw    = f.read()
-                        rbytes = resize_image(raw)
-                        d_str  = parse_date(f.name)
-                        slot   = slot_from_filename(f.name)
-                        d_obj  = date.fromisoformat(d_str) if d_str else date.fromisoformat(sel_ms)
-                        sk     = (d_str, slot)
-                        if sk in p_slot_map:
-                            idx = p_slot_map[sk]
-                            p_recs[idx].update({"_bytes": rbytes, "_filename": f.name, "_done": False})
-                        else:
-                            p_recs.append({
-                                "_filename": f.name, "_bytes": rbytes,
-                                "_date": d_str, "_slot": slot, "_done": False,
-                                "_위치": sel_loc, "_monday": sel_ms,
-                                "날짜": f"{d_obj.month}/{d_obj.day}({DAYS_KO[d_obj.weekday()]})" if d_str else "",
-                                "구분": slot, "측정시각": "", "온도(°C)": None,
-                                "습도(%)": None, "체감온도(°C)": None, "단계": "",
-                                "조치사항": "N/A", "기타내용": "", "측정자": "", "비고": "",
-                            })
-                        p_added += 1
-                    if p_added:
-                        st.toast(f"{p_added}개 사진 추가", icon="📸")
+        if key in rec_map_wk:
+            r = st.session_state.records[rec_map_wk[key]]
+            for c in DISPLAY_COLS:
+                old_val = _nan_to_none(r.get(c))
+                if c not in ("날짜","구분","체감온도(°C)","단계") and old_val != row.get(c):
+                    r[c] = row.get(c); changed = True
+            r["체감온도(°C)"] = row.get("체감온도(°C)")
+            r["단계"] = heat_label(row["체감온도(°C)"]) if row.get("체감온도(°C)") is not None else ""
+        else:
+            if T is not None and RH is not None:
+                d_str, slot = key
+                try: d_obj = date.fromisoformat(d_str)
+                except: d_obj = wk_monday
+                st.session_state.records.append({
+                    "_filename": "", "_bytes": None,
+                    "_date": d_str, "_slot": slot, "_done": True,
+                    "_monday": wk_monday.isoformat(),
+                    "날짜": f"{d_obj.month}/{d_obj.day}({DAYS_KO[d_obj.weekday()]})",
+                    "구분": slot, **{c: row[c] for c in DISPLAY_COLS if c not in ("날짜","구분")},
+                })
+                changed = True
 
-                # ── 버튼 행 ──────────────────────────────────────────────────
-                pb1, pb2, pb3, _ = st.columns([1.5, 1, 1.5, 2])
-                with pb1:
-                    p_do_extract = st.button(
-                        "🤖  AI 자동 추출", type="primary", key="p_extract",
-                        disabled=(not api_key or not any(r.get("_bytes") for r in p_recs)),
-                        use_container_width=True,
-                    )
-                with pb2:
-                    p_save = st.button(
-                        "💾  저장", key="p_save",
-                        disabled=not any(r.get("_done") for r in p_recs),
-                        use_container_width=True,
-                    )
-                with pb3:
-                    p_done_recs = [r for r in p_recs if r.get("_done")]
-                    if p_done_recs:
-                        p_mon_d = date.fromisoformat(sel_ms)
-                        p_wk_i  = get_month_weeks(p_mon_d.year, p_mon_d.month)
-                        p_wk_n  = next((w[0] for w in p_wk_i if w[2] == p_mon_d), 1)
-                        _p_code = (p_recs[0].get("_현장코드","") if p_recs else "").strip()
-                        _p_cpfx = f"({_p_code})" if _p_code else ""
-                        p_fname = f"{_p_cpfx}체감온도 기록관리 대장_{sel_loc}_{p_mon_d.year}년{p_mon_d.month}월{week_label_ko(p_wk_n)}.xlsx"
-                        p_meta_xl = {"현장명": p_recs[0].get("_현장명","") if p_recs else "",
-                                     "업체명": p_recs[0].get("_업체명","") if p_recs else "",
-                                     "위치": sel_loc}
-                        st.download_button(
-                            "📥  엑셀 저장", key="p_excel",
-                            data=build_excel(p_recs, p_meta_xl, p_mon_d),
-                            file_name=p_fname,
-                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                            use_container_width=True,
-                        )
-                    else:
-                        st.button("📥  엑셀 저장", disabled=True, key="p_excel_dis",
-                                  use_container_width=True)
+if changed:
+    st.rerun()
 
-                if p_save:
-                    try:
-                        p_mon_d  = date.fromisoformat(sel_ms)
-                        p_meta_s = {"위치": sel_loc,
-                                    "현장명":   (p_recs[0].get("_현장명","")   if p_recs else ""),
-                                    "업체명":   (p_recs[0].get("_업체명","")   if p_recs else ""),
-                                    "현장코드": (p_recs[0].get("_현장코드","") if p_recs else "")}
-                        save_history(p_meta_s,
-                                     [dict(r, _done=True) for r in p_recs if r.get("온도(°C)") is not None],
-                                     p_mon_d)
-                        h2 = load_history()
-                        st.session_state.file_history["past_records"] = h2.get("records", [])
-                        st.success("✅ 저장 완료!")
-                    except Exception as e:
-                        st.error(f"저장 오류: {e}")
+# ── 사진 미리보기 ────────────────────────────────────────────────────────
+photo_recs = [r for r in st.session_state.records if r.get("_bytes")]
+if photo_recs:
+    with st.expander("📷 사진 미리보기", expanded=False):
+        cols = st.columns(min(4, len(photo_recs)))
+        for i, rec in enumerate(photo_recs):
+            with cols[i % 4]:
+                try:
+                    img = Image.open(io.BytesIO(rec["_bytes"]))
+                    lev = rec.get("단계","")
+                    cap = f"**{rec['_filename']}**\n{rec.get('구분','')}"
+                    if rec.get("온도(°C)") is not None:
+                        cap += f"\n{rec['온도(°C)']}°C / {rec['습도(%)']}%"
+                    if rec.get("체감온도(°C)") is not None:
+                        cap += f" → 체감 **{rec['체감온도(°C)']}°C** ({lev})"
+                    st.image(img, use_container_width=True)
+                    st.caption(cap)
+                except Exception:
+                    st.caption(rec.get("_filename",""))
 
-                # ── AI 추출 실행 ─────────────────────────────────────────────
-                if p_do_extract and api_key:
-                    p_pending = [r for r in p_recs if not r.get("_done") and r.get("_bytes")]
-                    if p_pending:
-                        client = google_genai.Client(api_key=api_key)
-                        pbar = st.progress(0); pstat = st.empty()
-                        pstat.caption(f"⏳ {len(p_pending)}장 추출 중…")
-                        perrs = []; pdone = 0
-                        with ThreadPoolExecutor(max_workers=min(4, len(p_pending))) as ex:
-                            futs = {ex.submit(_extract_one, client, rec): rec for rec in p_pending}
-                            for fut in as_completed(futs):
-                                rec = futs[fut]; pdone += 1
-                                pbar.progress(pdone / len(p_pending))
-                                try:
-                                    fut.result()
-                                except Exception as e:
-                                    perrs.append(rec.get("_filename",""))
-                                    st.error(f"❌ {rec.get('_filename','')} 오류: {e}")
-                        pbar.progress(1.0)
-                        pstat.success("✅ 추출 완료!" if not perrs else f"⚠️ {len(perrs)}개 실패")
-                        st.rerun()
-
-                # ── 기록 테이블 ──────────────────────────────────────────────
-                st.markdown(f'<div class="week-tag">📅 {monday_map[sel_ms]}</div>',
-                            unsafe_allow_html=True)
-
-                p_mon_d   = date.fromisoformat(sel_ms)
-                p_rec_map = {(r.get("_date",""), r.get("_slot","")): i
-                             for i, r in enumerate(p_recs)}
-
-                p_grid = []
-                for di in range(7):
-                    d = p_mon_d + timedelta(days=di)
-                    for slot in SLOTS:
-                        key = (d.isoformat(), slot)
-                        if key in p_rec_map:
-                            r = p_recs[p_rec_map[key]]
-                            p_grid.append({
-                                "날짜": f"{d.month}/{d.day}({DAYS_KO[d.weekday()]})",
-                                "구분": slot,
-                                "측정시각": r.get("측정시각",""),
-                                "온도(°C)": r.get("온도(°C)"),
-                                "습도(%)": r.get("습도(%)"),
-                                "체감온도(°C)": r.get("체감온도(°C)"),
-                                "단계": LEVEL_BADGE.get(r.get("단계",""), r.get("단계","")),
-                                "조치사항": r.get("조치사항","N/A"),
-                                "기타내용": r.get("기타내용",""),
-                                "측정자": r.get("측정자",""),
-                                "비고": r.get("비고",""),
-                                "_key": key,
-                            })
-                        else:
-                            p_grid.append({
-                                "날짜": f"{d.month}/{d.day}({DAYS_KO[d.weekday()]})",
-                                "구분": slot, "측정시각": "", "온도(°C)": None,
-                                "습도(%)": None, "체감온도(°C)": None, "단계": "",
-                                "조치사항": "N/A", "기타내용": "", "측정자": "",
-                                "비고": "", "_key": key,
-                            })
-
-                p_grid_keys = [r["_key"] for r in p_grid]
-                p_df = pd.DataFrame([{c: r[c] for c in DISPLAY_COLS} for r in p_grid])
-
-                p_edited = st.data_editor(
-                    p_df, use_container_width=True, num_rows="fixed", hide_index=True,
-                    key="p_editor",
-                    column_config={
-                        "날짜":         st.column_config.TextColumn("날짜",     disabled=True, width=90),
-                        "구분":         st.column_config.TextColumn("구분",     disabled=True, width=70),
-                        "측정시각":     st.column_config.TextColumn("측정시각", width=80),
-                        "온도(°C)":     st.column_config.NumberColumn("온도(°C)",    format="%.1f°C", step=0.1, width=85),
-                        "습도(%)":      st.column_config.NumberColumn("습도(%)",     format="%.0f%%", step=1,   width=75),
-                        "체감온도(°C)": st.column_config.NumberColumn("체감온도(°C)", format="%.1f°C", disabled=True, width=100),
-                        "단계":         st.column_config.TextColumn("단계",     disabled=True, width=60),
-                        "조치사항":     st.column_config.SelectboxColumn("조치사항", options=ACTIONS, width=150),
-                        "기타내용":     st.column_config.TextColumn("기타내용(기타 선택시)", width=130),
-                        "측정자":       st.column_config.TextColumn("측정자",   width=80),
-                        "비고":         st.column_config.TextColumn("비고",     width=130),
-                    },
-                )
-
-                p_changed = False
-                for row_i, key in enumerate(p_grid_keys):
-                    row = {k: _nan_to_none(v) for k, v in p_edited.iloc[row_i].to_dict().items()}
-                    T = row["온도(°C)"]; RH = row["습도(%)"]
-                    if T is not None and RH is not None:
-                        try:
-                            hi = heat_index(float(T), float(RH))
-                            row["체감온도(°C)"] = hi; row["단계"] = heat_label(hi)
-                        except: pass
-
-                    if key in p_rec_map:
-                        r = p_recs[p_rec_map[key]]
-                        for c in DISPLAY_COLS:
-                            old_val = _nan_to_none(r.get(c))
-                            if c not in ("날짜","구분","체감온도(°C)","단계") and old_val != row.get(c):
-                                r[c] = row.get(c); p_changed = True
-                        r["체감온도(°C)"] = row.get("체감온도(°C)")
-                        r["단계"] = heat_label(row["체감온도(°C)"]) if row.get("체감온도(°C)") is not None else ""
-                    else:
-                        if T is not None and RH is not None:
-                            d_str, slot = key
-                            try: d_obj = date.fromisoformat(d_str)
-                            except: d_obj = p_mon_d
-                            p_recs.append({
-                                "_filename": "", "_bytes": None,
-                                "_date": d_str, "_slot": slot, "_done": True,
-                                "_위치": sel_loc, "_monday": sel_ms,
-                                "날짜": f"{d_obj.month}/{d_obj.day}({DAYS_KO[d_obj.weekday()]})",
-                                "구분": slot, **{c: row[c] for c in DISPLAY_COLS if c not in ("날짜","구분")},
-                            })
-                            p_changed = True
-
-                if p_changed:
-                    st.rerun()
-
-                # ── 사진 미리보기 ─────────────────────────────────────────────
-                p_photo_recs = [r for r in p_recs if r.get("_bytes")]
-                if p_photo_recs:
-                    with st.expander("📷 사진 미리보기", expanded=False):
-                        p_cols = st.columns(min(4, len(p_photo_recs)))
-                        for i, rec in enumerate(p_photo_recs):
-                            with p_cols[i % 4]:
-                                try:
-                                    img = Image.open(io.BytesIO(rec["_bytes"]))
-                                    cap = f"**{rec.get('_filename','')}**\n{rec.get('구분','')}"
-                                    if rec.get("온도(°C)") is not None:
-                                        cap += f"\n{rec['온도(°C)']}°C / {rec['습도(%)']}%"
-                                    if rec.get("체감온도(°C)") is not None:
-                                        cap += f" → 체감 **{rec['체감온도(°C)']}°C** ({rec.get('단계','')})"
-                                    st.image(img, use_container_width=True)
-                                    st.caption(cap)
-                                except:
-                                    st.caption(rec.get("_filename",""))
