@@ -142,7 +142,7 @@ def load_history():
                 return json.load(f)
         except Exception:
             pass
-    return {"현장명": [], "업체명": [], "위치": [], "records": []}
+    return {"현장명": [], "업체명": [], "위치": [], "현장코드_map": {}, "records": []}
 
 def save_history(meta: dict, records: list, monday: date = None):
     h = load_history()
@@ -150,6 +150,12 @@ def save_history(meta: dict, records: list, monday: date = None):
         v = meta.get(k, "").strip()
         if v and v not in h[k]:
             h[k].append(v)
+    code = meta.get("현장코드", "").strip()
+    name = meta.get("현장명", "").strip()
+    if code and name:
+        if "현장코드_map" not in h:
+            h["현장코드_map"] = {}
+        h["현장코드_map"][code] = name
     mon_str = monday.isoformat() if monday else ""
     for rec in records:
         if not rec.get("_done"):
@@ -157,10 +163,11 @@ def save_history(meta: dict, records: list, monday: date = None):
         slim = {k: v for k, v in rec.items() if k not in ("_bytes", "_bytes_b64")}
         if rec.get("_bytes"):
             slim["_bytes_b64"] = base64.b64encode(rec["_bytes"]).decode("ascii")
-        slim["_위치"]   = meta.get("위치", "")
-        slim["_현장명"] = meta.get("현장명", "")
-        slim["_업체명"] = meta.get("업체명", "")
-        slim["_monday"] = mon_str
+        slim["_위치"]     = meta.get("위치", "")
+        slim["_현장명"]   = meta.get("현장명", "")
+        slim["_업체명"]   = meta.get("업체명", "")
+        slim["_현장코드"] = meta.get("현장코드", "")
+        slim["_monday"]   = mon_str
         idx = next(
             (i for i, r in enumerate(h["records"])
              if r.get("_date") == slim.get("_date")
@@ -431,7 +438,7 @@ if "meta" not in st.session_state:
     today = date.today()
     cur_week = next((w for w in weeks if w[2] <= today <= w[2]+timedelta(days=6)), weeks[0] if weeks else None)
     st.session_state.meta = {
-        "현장명": "", "업체명": "", "위치": "", "측정자": "",
+        "현장코드": "", "현장명": "", "업체명": "", "위치": "", "측정자": "",
         "year": now.year, "month": now.month,
         "week_n": cur_week[0] if cur_week else 1,
         "monday": cur_week[2] if cur_week else date(now.year, now.month, 1),
@@ -443,6 +450,7 @@ if "file_history" not in st.session_state:
         "현장명": h.get("현장명", []),
         "업체명": h.get("업체명", []),
         "위치":   h.get("위치",   []),
+        "현장코드_map": h.get("현장코드_map", {}),
         "past_records": h.get("records", []),
     }
 
@@ -453,6 +461,8 @@ if "past_active_recs" not in st.session_state:
     st.session_state.past_active_recs = []
 if "past_sel_key" not in st.session_state:
     st.session_state.past_sel_key = None
+if "view_mode" not in st.session_state:
+    st.session_state.view_mode = "작성"
 
 # ── 사이드바 ───────────────────────────────────────────────────────────────
 with st.sidebar:
@@ -484,6 +494,36 @@ with st.sidebar:
             val = st.text_input(label, key=f"txt_{key}", placeholder=label)
         return val
 
+    # 현장코드 입력
+    code_map = fh.get("현장코드_map", {})
+    known_codes = list(code_map.keys())
+    if known_codes:
+        code_choice = st.selectbox("현장코드", ["✏️ 직접 입력"] + known_codes, key="sel_code")
+        if code_choice == "✏️ 직접 입력":
+            site_code = st.text_input(" ", key="txt_code", label_visibility="collapsed",
+                                      placeholder="현장코드 (예: J881)")
+        else:
+            site_code = code_choice
+    else:
+        site_code = st.text_input("현장코드", key="txt_code", placeholder="현장코드 (예: J881)")
+
+    # 현장코드 변경 시 현장명 자동입력
+    prev_code = st.session_state.get("_prev_code", "")
+    if site_code != prev_code:
+        st.session_state["_prev_code"] = site_code
+        if site_code in code_map:
+            auto_name = code_map[site_code]
+            site_opts = fh.get("현장명", [])
+            if site_opts:
+                if auto_name in site_opts:
+                    st.session_state["sel_site"] = auto_name
+                else:
+                    st.session_state["sel_site"] = "✏️ 직접 입력"
+                    st.session_state["txt_site"] = auto_name
+            else:
+                st.session_state["txt_site"] = auto_name
+    meta["현장코드"] = site_code
+
     meta["현장명"] = meta_field("현장명", "site",    "현장명")
     meta["업체명"] = meta_field("업체명", "company", "업체명")
     meta["위치"]   = meta_field("온습도계 위치", "location", "위치")
@@ -507,6 +547,16 @@ with st.sidebar:
     chosen = weeks[week_labels.index(sel_wk)]
     meta["week_n"] = chosen[0]; meta["monday"] = chosen[2]
     monday: date = meta["monday"]
+
+    vm_c1, vm_c2 = st.columns(2)
+    with vm_c1:
+        if st.button("✏️ 기록 작성", use_container_width=True,
+                     type="primary" if st.session_state.view_mode == "작성" else "secondary"):
+            st.session_state.view_mode = "작성"; st.rerun()
+    with vm_c2:
+        if st.button("🔍 이전기록 조회", use_container_width=True,
+                     type="primary" if st.session_state.view_mode == "조회" else "secondary"):
+            st.session_state.view_mode = "조회"; st.rerun()
 
     st.markdown("---")
     st.markdown("**📊 KOSHA 폭염 단계**")
@@ -548,17 +598,19 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
-# ── 탭 ─────────────────────────────────────────────────────────────────────
-tab1, tab2 = st.tabs(["📝  기록 작성", "🗂  이전 기록 조회"])
-
 def slot_from_filename(filename: str) -> str:
     m = re.search(r'\((\d+)\)', filename)
     if m:
         return {1:"오전1", 2:"오전2", 3:"오후1", 4:"오후2"}.get(int(m.group(1)), SLOTS[0])
     return SLOTS[0]
 
-# ══════════════════════════════════════════════════════════ TAB 1 ══════════
-with tab1:
+def _nan_to_none(v):
+    return None if isinstance(v, float) and math.isnan(v) else v
+
+DISPLAY_COLS = ["날짜","구분","측정시각","온도(°C)","습도(%)","체감온도(°C)","단계","조치사항","기타내용","측정자","비고"]
+
+# ══════════════════════════════════════════════════════════ 기록 작성 ════════
+if st.session_state.view_mode == "작성":
     uploaded = st.file_uploader(
         "📂  온습도계 사진 선택 (여러 장 동시 선택 가능, 업로드 시 자동 리사이즈)",
         type=["jpg","jpeg","png","bmp"], accept_multiple_files=True,
@@ -650,11 +702,6 @@ with tab1:
                 pass
         return monday
 
-    def _nan_to_none(v):
-        return None if isinstance(v, float) and math.isnan(v) else v
-
-    DISPLAY_COLS = ["날짜","구분","측정시각","온도(°C)","습도(%)","체감온도(°C)","단계","조치사항","기타내용","측정자","비고"]
-
     all_mondays = sorted({_rec_monday_wk(r) for r in st.session_state.records}) if st.session_state.records else [monday]
 
     # ── KPI 요약 (전체) ──────────────────────────────────────────────────────
@@ -692,7 +739,10 @@ with tab1:
         with hc2:
             if wk_done:
                 wk_all = [r for r in st.session_state.records if _rec_monday_wk(r) == wk_monday]
-                fname  = f"체감온도기록_{wk_monday.strftime('%Y%m%d')}_{week_label_ko(wk_n)}.xlsx"
+                _code  = meta.get("현장코드","").strip()
+                _loc   = meta.get("위치","").strip() or "위치미정"
+                _cpfx  = f"({_code})" if _code else ""
+                fname  = f"{_cpfx}체감온도 기록관리 대장_{_loc}_{wk_monday.year}년{wk_monday.month}월{week_label_ko(wk_n)}.xlsx"
                 save_history(meta, wk_all, wk_monday)
                 st.download_button("💾 엑셀", key=f"dl_{wk_monday.isoformat()}",
                     data=build_excel(wk_all, meta, wk_monday),
@@ -857,13 +907,13 @@ with tab1:
                     except Exception:
                         st.caption(rec.get("_filename",""))
 
-# ══════════════════════════════════════════════════════════ TAB 2 ══════════
-with tab2:
+# ══════════════════════════════════════════════════════════ 이전기록 조회 ════
+else:
     h_fresh = load_history()
     past_all = h_fresh.get("records", [])
 
     if not past_all:
-        st.info("저장된 기록이 없습니다.  \n기록 작성 탭에서 AI 추출 후 **엑셀 저장** 버튼을 누르면 기록이 쌓입니다.")
+        st.info("저장된 기록이 없습니다.  \n**✏️ 기록 작성** 화면에서 AI 추출 후 **엑셀 저장** 버튼을 누르면 기록이 쌓입니다.")
     else:
         # ── 필터 ──────────────────────────────────────────────────────────────
         cf1, cf2, cf3 = st.columns(3)
@@ -987,7 +1037,9 @@ with tab2:
                         p_mon_d = date.fromisoformat(sel_ms)
                         p_wk_i  = get_month_weeks(p_mon_d.year, p_mon_d.month)
                         p_wk_n  = next((w[0] for w in p_wk_i if w[2] == p_mon_d), 1)
-                        p_fname = f"체감온도기록_{sel_ms.replace('-','')}_{week_label_ko(p_wk_n)}.xlsx"
+                        _p_code = (p_recs[0].get("_현장코드","") if p_recs else "").strip()
+                        _p_cpfx = f"({_p_code})" if _p_code else ""
+                        p_fname = f"{_p_cpfx}체감온도 기록관리 대장_{sel_loc}_{p_mon_d.year}년{p_mon_d.month}월{week_label_ko(p_wk_n)}.xlsx"
                         p_meta_xl = {"현장명": p_recs[0].get("_현장명","") if p_recs else "",
                                      "업체명": p_recs[0].get("_업체명","") if p_recs else "",
                                      "위치": sel_loc}
@@ -1006,8 +1058,9 @@ with tab2:
                     try:
                         p_mon_d  = date.fromisoformat(sel_ms)
                         p_meta_s = {"위치": sel_loc,
-                                    "현장명": (p_recs[0].get("_현장명","") if p_recs else ""),
-                                    "업체명": (p_recs[0].get("_업체명","") if p_recs else "")}
+                                    "현장명":   (p_recs[0].get("_현장명","")   if p_recs else ""),
+                                    "업체명":   (p_recs[0].get("_업체명","")   if p_recs else ""),
+                                    "현장코드": (p_recs[0].get("_현장코드","") if p_recs else "")}
                         save_history(p_meta_s,
                                      [dict(r, _done=True) for r in p_recs if r.get("온도(°C)") is not None],
                                      p_mon_d)
